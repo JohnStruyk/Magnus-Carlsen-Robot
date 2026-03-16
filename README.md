@@ -8,3 +8,5 @@ ishag003@umn.edu\
 minch015@umn.edu\
 **Riley Donat**\
 donat106@umn.edu
+**Christopher Melville**\
+melvi083@umn.edu
