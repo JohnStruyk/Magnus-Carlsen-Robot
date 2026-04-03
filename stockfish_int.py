@@ -7,7 +7,7 @@ import os
 def get_best_move(fen_string, time_limit=2.0):
     # 1. Path to your downloaded Stockfish executable
     # Update this to your actual path (e.g., "./stockfish/stockfish-windows-x86-64.exe")
-    engine_path = r"stockfish\stockfish-windows-x86-64-avx2.exe"
+    engine_path = r"/home/rob/Desktop/stockfish/stockfish-ubuntu-x86-64-avx2"
     # 2. Initialize the engine
     with chess.engine.SimpleEngine.popen_uci(engine_path) as engine:
         
