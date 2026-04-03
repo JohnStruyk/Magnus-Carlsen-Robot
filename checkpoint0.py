@@ -4,6 +4,8 @@ from pupil_apriltags import Detector
 from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
 
+from image_to_fen import *
+
 TAG_SIZE = 0.08
 
 # top-left, top-right, bottom-left, bottom-right
@@ -143,6 +145,15 @@ def main():
     try:
         # Get Observation
         cv_image = zed.image
+        cv_point_cloud = zed.point_cloud
+
+        np.savez("img_n_pc", cv_image=cv_image, cv_point_cloud=cv_point_cloud)
+
+        corners = find_chessboard_with_pattern(cv_image)
+
+        quad = chessboard_corners_to_quad(corners, (7, 7))
+
+        warp_chessboard_from_corners(cv_image, quad, (7, 7))
 
         # Get Transformation
         t_cam_robot = get_transform_camera_robot(cv_image, camera_intrinsic)
