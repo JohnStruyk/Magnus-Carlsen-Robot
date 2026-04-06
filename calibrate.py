@@ -20,7 +20,7 @@ ROBOT_CALIB_CONFIG = {
 # Chessboard Calibration (4 tags on board to establish board-to-camera)
 BOARD_CONFIG = {
     "tag_size": 0.0265,        
-    "square_size": 0.0236,    
+    "square_size": 0.025,    
     "grid_size": (8, 8),     
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
@@ -30,7 +30,7 @@ BOARD_CONFIG = {
         3: [0.23713, 0.15572]       # Top-Right
     },
     # Offset from Tag 0 center to the center of the first chessboard square (0,0)
-    "grid_origin_offset": [0.036, -0.004] 
+    "grid_origin_offset": [0.03, -0.008] 
 }
 
 # --- 2. TRANSFORMATION LOGIC ---
@@ -141,7 +141,9 @@ def main():
         print(f"Captured {len(tags)} tags.")
         print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
         
-        cv2.imshow('Robot Calibration', cv_image)
+        resized_img = cv2.resize(cv_image, (1080, 700))
+
+        cv2.imshow('Robot Calibration', resized_img)
         cv2.waitKey(0)
 
         return robot_frame_centers # These are the center locations of the chess board squares relative to the robot frame
