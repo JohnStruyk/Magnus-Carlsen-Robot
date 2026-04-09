@@ -143,6 +143,8 @@ def main():
         
         resized_img = cv2.resize(cv_image, (1080, 700))
 
+        
+
         cv2.imshow('Robot Calibration', resized_img)
         cv2.waitKey(0)
 
@@ -182,6 +184,9 @@ def main():
         H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
         warped = cv2.warpPerspective(cv_image, H_mat, (W, H))
+
+        for pt in img_corners:
+            cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
 
         cv2.imshow("Warped Chessboard", warped)
         cv2.waitKey(0)
