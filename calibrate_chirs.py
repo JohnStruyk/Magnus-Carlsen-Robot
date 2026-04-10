@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
-from utils.zed_camera import ZedCamera
+#from utils.zed_camera import ZedCamera
 
 # --- 1. CONFIGURATION ---
 
@@ -30,7 +30,8 @@ BOARD_CONFIG = {
         3: [0.23713, 0.15572]       # Top-Right
     },
     # Offset from Tag 0 center to the center of the first chessboard square (0,0)
-    "grid_origin_offset": [0.03, -0.008] 
+    #"grid_origin_offset": [0.03, -0.008] 
+    "grid_origin_offset": [0.0175, -0.0205] 
 }
 
 # --- 2. TRANSFORMATION LOGIC ---
@@ -93,15 +94,16 @@ def get_board_centers_local(config):
 # --- 3. MAIN ---
 
 def main():
-    zed = ZedCamera()
-    camera_intrinsic = zed.camera_intrinsic
+   # zed = ZedCamera()
+   # camera_intrinsic = zed.camera_intrinsic
     detector = Detector(families='tag36h11 tag25h9')
 
-    try:
-        cv_image = zed.image
-        if cv_image is None: return
+    camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
 
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2GRAY)
+    try:
+        cv_image = np.load("sample_image.npy")
+
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
         tags = detector.detect(gray)
 
         # 1. Camera -> Robot Transform (Using original Robot Tag logic)
@@ -141,12 +143,6 @@ def main():
         print(f"Captured {len(tags)} tags.")
         print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
         
-        resized_img = cv2.resize(cv_image, (1080, 700))
-
-        
-
-        cv2.imshow('Robot Calibration', resized_img)
-        cv2.waitKey(0)
 
         # --- Warp chessboard ---
 
@@ -188,13 +184,19 @@ def main():
         for pt in img_corners:
             cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
 
+        resized_img = cv2.resize(cv_image, (1080, 700))
+
+        
+
+        cv2.imshow('Robot Calibration', resized_img)
+        cv2.waitKey(0)
+
         cv2.imshow("Warped Chessboard", warped)
         cv2.waitKey(0)
 
         return robot_frame_centers # These are the center locations of the chess board squares relative to the robot frame
 
     finally:
-        zed.close()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
