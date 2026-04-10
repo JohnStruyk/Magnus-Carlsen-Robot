@@ -30,9 +30,15 @@ BOARD_CONFIG = {
         3: [0.23713, 0.15572]       # Top-Right
     },
     # Offset from Tag 0 center to the center of the first chessboard square (0,0)
-    #"grid_origin_offset": [0.03, -0.008] 
-    "grid_origin_offset": [0.0175, -0.0205] 
+    "grid_origin_offset": [0.03, -0.008] 
+    #"grid_origin_offset": [0.0175, -0.0205] 
 }
+
+TAG_WIDTH_OFFSET = 17.5
+TAG_HEIGHT_OFFSET = -20.5
+
+
+
 
 # --- 2. TRANSFORMATION LOGIC ---
 
@@ -160,6 +166,17 @@ def main():
             [off_x + H / square_px * s, off_y, 0],
         ], dtype=np.float32)
 
+
+        board_corners_3d = np.array([
+            BOARD_CONFIG["tag_centers"][0],  # bottom-left
+            BOARD_CONFIG["tag_centers"][1],  # top-left
+            BOARD_CONFIG["tag_centers"][3],  # top-right
+            BOARD_CONFIG["tag_centers"][2],  # bottom-right
+        ], dtype=np.float32)
+
+        # add z=0
+        board_corners_3d = np.hstack([board_corners_3d, np.zeros((4,1), dtype=np.float32)])
+
         img_corners, _ = cv2.projectPoints(
             board_corners_3d,
             b_rvec,
@@ -169,6 +186,36 @@ def main():
         )
 
         img_corners = img_corners.reshape(-1, 2)
+
+
+        tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
+
+        # Ensure all 4 tags exist
+        if not all(tid in tag_dict for tid in BOARD_CONFIG["tag_ids"]):
+            print("Not all board tags detected.")
+            return
+
+        # Order: BL, TL, TR, BR (must match dst_corners!)
+        img_corners = np.array([
+            tag_dict[0].center,  # bottom-left
+            tag_dict[1].center,  # top-left
+            tag_dict[3].center,  # top-right
+            tag_dict[2].center,  # bottom-right
+        ], dtype=np.float32)
+
+        print(img_corners)
+
+        '''
+        img_corners[0, 0] += TAG_WIDTH_OFFSET
+        img_corners[0, 1] += TAG_WIDTH_OFFSET
+        img_corners[1, 0] += TAG_WIDTH_OFFSET
+        img_corners[1, 1] += TAG_WIDTH_OFFSET
+        img_corners[2, 0] -= TAG_WIDTH_OFFSET
+        img_corners[2, 1] += TAG_WIDTH_OFFSET
+        img_corners[3, 0] -= TAG_WIDTH_OFFSET
+        img_corners[3, 1] -= TAG_WIDTH_OFFSET
+        '''
+        
 
         dst_corners = np.array([
             [0, 0],
