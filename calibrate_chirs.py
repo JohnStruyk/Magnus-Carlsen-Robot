@@ -97,7 +97,7 @@ def get_board_centers_local(config):
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
-def get_warped(img, b_rvec, b_tvec, intrix, square_px=60):
+def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     W = BOARD_CONFIG["grid_size"][1] * square_px
     H = BOARD_CONFIG["grid_size"][0] * square_px
 
@@ -166,8 +166,15 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px=60):
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
 
-    #img corners are in 3d board space i think
+    #img corners are in 2d image space i think
     return warped, img_corners
+
+def get_square(warped, row, col, square_px):
+    upper_border = square_px * row
+    left_border = square_px * col
+    return warped[upper_border : upper_border + square_px, left_border : left_border + square_px]
+
+
 
 
 # --- 3. MAIN ---
@@ -244,12 +251,17 @@ def main():
         # Blend: 0.5 (original) + 0.5 (overlay)
         warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
 
+        square = get_square(warped, 2, 3, output_square_px)
+
         
 
         cv2.imshow('Robot Calibration', resized_img)
         cv2.waitKey(0)
 
         cv2.imshow("Warped Chessboard", warped)
+        cv2.waitKey(0)
+
+        cv2.imshow("Row 2 Col 3", square)
         cv2.waitKey(0)
 
         return robot_frame_centers # These are the center locations of the chess board squares relative to the robot frame
