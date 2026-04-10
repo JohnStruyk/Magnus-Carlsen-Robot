@@ -30,8 +30,8 @@ BOARD_CONFIG = {
         3: [0.23713, 0.15572]       # Top-Right
     },
     # Offset from Tag 0 center to the center of the first chessboard square (0,0)
-    "grid_origin_offset": [0.03, -0.008] 
-    #"grid_origin_offset": [0.0175, -0.0205] 
+    #"grid_origin_offset": [0.03, -0.008] 
+    "grid_origin_offset": [0.0175, -0.0205] 
 }
 
 TAG_WIDTH_OFFSET = 17.5
@@ -152,21 +152,13 @@ def main():
 
         # --- Warp chessboard ---
 
-        square_px = 100
+        square_px = 60
         W = BOARD_CONFIG["grid_size"][1] * square_px
         H = BOARD_CONFIG["grid_size"][0] * square_px
 
         off_x, off_y = BOARD_CONFIG["grid_origin_offset"]
-        s = BOARD_CONFIG["square_size"]
 
-        board_corners_3d = np.array([
-            [off_x, off_y, 0],
-            [off_x, off_y + W / square_px * s, 0],
-            [off_x + H / square_px * s, off_y + W / square_px * s, 0],
-            [off_x + H / square_px * s, off_y, 0],
-        ], dtype=np.float32)
-
-
+        
         board_corners_3d = np.array([
             BOARD_CONFIG["tag_centers"][0],  # bottom-left
             BOARD_CONFIG["tag_centers"][1],  # top-left
@@ -174,8 +166,21 @@ def main():
             BOARD_CONFIG["tag_centers"][2],  # bottom-right
         ], dtype=np.float32)
 
+        board_corners_3d[0, 0] += off_x
+        board_corners_3d[0, 1] += off_y
+
+        board_corners_3d[1, 0] += off_x
+        board_corners_3d[1, 1] -= off_y
+
+        board_corners_3d[2, 0] -= off_x
+        board_corners_3d[2, 1] -= off_y
+
+        board_corners_3d[3, 0] -= off_x
+        board_corners_3d[3, 1] += off_y
+
         # add z=0
         board_corners_3d = np.hstack([board_corners_3d, np.zeros((4,1), dtype=np.float32)])
+        
 
         img_corners, _ = cv2.projectPoints(
             board_corners_3d,
@@ -187,7 +192,7 @@ def main():
 
         img_corners = img_corners.reshape(-1, 2)
 
-
+        '''FINDING TAGS USING APRIL TAG NOT BOARD CONFIG
         tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
 
         # Ensure all 4 tags exist
@@ -202,18 +207,6 @@ def main():
             tag_dict[3].center,  # top-right
             tag_dict[2].center,  # bottom-right
         ], dtype=np.float32)
-
-        print(img_corners)
-
-        '''
-        img_corners[0, 0] += TAG_WIDTH_OFFSET
-        img_corners[0, 1] += TAG_WIDTH_OFFSET
-        img_corners[1, 0] += TAG_WIDTH_OFFSET
-        img_corners[1, 1] += TAG_WIDTH_OFFSET
-        img_corners[2, 0] -= TAG_WIDTH_OFFSET
-        img_corners[2, 1] += TAG_WIDTH_OFFSET
-        img_corners[3, 0] -= TAG_WIDTH_OFFSET
-        img_corners[3, 1] -= TAG_WIDTH_OFFSET
         '''
         
 
@@ -232,6 +225,19 @@ def main():
             cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
 
         resized_img = cv2.resize(cv_image, (1080, 700))
+
+        overlay = np.zeros_like(warped)
+        colors = [(128, 0, 128), (0, 165, 255)]  # Purple and Orange (BGR)
+
+        for r in range(BOARD_CONFIG["grid_size"][0]):
+            for c in range(BOARD_CONFIG["grid_size"][1]):
+                color = colors[(r + c) % 2]
+                top_left = (c * square_px, r * square_px)
+                bottom_right = ((c + 1) * square_px, (r + 1) * square_px)
+                cv2.rectangle(overlay, top_left, bottom_right, color, -1)
+
+        # Blend: 0.5 (original) + 0.5 (overlay)
+        warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
 
         
 
