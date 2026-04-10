@@ -97,6 +97,79 @@ def get_board_centers_local(config):
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
+def get_warped(img, b_rvec, b_tvec, intrix, square_px=60):
+    W = BOARD_CONFIG["grid_size"][1] * square_px
+    H = BOARD_CONFIG["grid_size"][0] * square_px
+
+    off_x, off_y = BOARD_CONFIG["grid_origin_offset"]
+
+    
+    board_corners_3d = np.array([
+        BOARD_CONFIG["tag_centers"][0],  # bottom-left
+        BOARD_CONFIG["tag_centers"][1],  # top-left
+        BOARD_CONFIG["tag_centers"][3],  # top-right
+        BOARD_CONFIG["tag_centers"][2],  # bottom-right
+    ], dtype=np.float32)
+
+    board_corners_3d[0, 0] += off_x
+    board_corners_3d[0, 1] += off_y
+
+    board_corners_3d[1, 0] += off_x
+    board_corners_3d[1, 1] -= off_y
+
+    board_corners_3d[2, 0] -= off_x
+    board_corners_3d[2, 1] -= off_y
+
+    board_corners_3d[3, 0] -= off_x
+    board_corners_3d[3, 1] += off_y
+
+    # add z=0
+    board_corners_3d = np.hstack([board_corners_3d, np.zeros((4,1), dtype=np.float32)])
+    
+
+    img_corners, _ = cv2.projectPoints(
+        board_corners_3d,
+        b_rvec,
+        b_tvec,
+        intrix,
+        None
+    )
+
+    img_corners = img_corners.reshape(-1, 2)
+
+    '''FINDING TAGS USING APRIL TAG NOT BOARD CONFIG
+    tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
+
+    # Ensure all 4 tags exist
+    if not all(tid in tag_dict for tid in BOARD_CONFIG["tag_ids"]):
+        print("Not all board tags detected.")
+        return
+
+    # Order: BL, TL, TR, BR (must match dst_corners!)
+    img_corners = np.array([
+        tag_dict[0].center,  # bottom-left
+        tag_dict[1].center,  # top-left
+        tag_dict[3].center,  # top-right
+        tag_dict[2].center,  # bottom-right
+    ], dtype=np.float32)
+    '''
+    
+
+    dst_corners = np.array([
+        [0, 0],
+        [0, H],
+        [W, H],
+        [W, 0]
+    ], dtype=np.float32)
+
+    H_mat, _ = cv2.findHomography(img_corners, dst_corners)
+
+    warped = cv2.warpPerspective(img, H_mat, (W, H))
+
+    #img corners are in 3d board space i think
+    return warped, img_corners
+
+
 # --- 3. MAIN ---
 
 def main():
@@ -148,78 +221,10 @@ def main():
 
         print(f"Captured {len(tags)} tags.")
         print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
-        
 
-        # --- Warp chessboard ---
+        output_square_px = 100
 
-        square_px = 60
-        W = BOARD_CONFIG["grid_size"][1] * square_px
-        H = BOARD_CONFIG["grid_size"][0] * square_px
-
-        off_x, off_y = BOARD_CONFIG["grid_origin_offset"]
-
-        
-        board_corners_3d = np.array([
-            BOARD_CONFIG["tag_centers"][0],  # bottom-left
-            BOARD_CONFIG["tag_centers"][1],  # top-left
-            BOARD_CONFIG["tag_centers"][3],  # top-right
-            BOARD_CONFIG["tag_centers"][2],  # bottom-right
-        ], dtype=np.float32)
-
-        board_corners_3d[0, 0] += off_x
-        board_corners_3d[0, 1] += off_y
-
-        board_corners_3d[1, 0] += off_x
-        board_corners_3d[1, 1] -= off_y
-
-        board_corners_3d[2, 0] -= off_x
-        board_corners_3d[2, 1] -= off_y
-
-        board_corners_3d[3, 0] -= off_x
-        board_corners_3d[3, 1] += off_y
-
-        # add z=0
-        board_corners_3d = np.hstack([board_corners_3d, np.zeros((4,1), dtype=np.float32)])
-        
-
-        img_corners, _ = cv2.projectPoints(
-            board_corners_3d,
-            b_rvec,
-            b_tvec,
-            camera_intrinsic,
-            None
-        )
-
-        img_corners = img_corners.reshape(-1, 2)
-
-        '''FINDING TAGS USING APRIL TAG NOT BOARD CONFIG
-        tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
-
-        # Ensure all 4 tags exist
-        if not all(tid in tag_dict for tid in BOARD_CONFIG["tag_ids"]):
-            print("Not all board tags detected.")
-            return
-
-        # Order: BL, TL, TR, BR (must match dst_corners!)
-        img_corners = np.array([
-            tag_dict[0].center,  # bottom-left
-            tag_dict[1].center,  # top-left
-            tag_dict[3].center,  # top-right
-            tag_dict[2].center,  # bottom-right
-        ], dtype=np.float32)
-        '''
-        
-
-        dst_corners = np.array([
-            [0, 0],
-            [0, H],
-            [W, H],
-            [W, 0]
-        ], dtype=np.float32)
-
-        H_mat, _ = cv2.findHomography(img_corners, dst_corners)
-
-        warped = cv2.warpPerspective(cv_image, H_mat, (W, H))
+        warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
 
         for pt in img_corners:
             cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
@@ -232,8 +237,8 @@ def main():
         for r in range(BOARD_CONFIG["grid_size"][0]):
             for c in range(BOARD_CONFIG["grid_size"][1]):
                 color = colors[(r + c) % 2]
-                top_left = (c * square_px, r * square_px)
-                bottom_right = ((c + 1) * square_px, (r + 1) * square_px)
+                top_left = (c * output_square_px, r * output_square_px)
+                bottom_right = ((c + 1) * output_square_px, (r + 1) * output_square_px)
                 cv2.rectangle(overlay, top_left, bottom_right, color, -1)
 
         # Blend: 0.5 (original) + 0.5 (overlay)
