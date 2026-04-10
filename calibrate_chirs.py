@@ -156,10 +156,10 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     
 
     dst_corners = np.array([
-        [0, 0],
         [0, H],
-        [W, H],
-        [W, 0]
+        [0, 0],
+        [W, 0],
+        [W, H]
     ], dtype=np.float32)
 
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
