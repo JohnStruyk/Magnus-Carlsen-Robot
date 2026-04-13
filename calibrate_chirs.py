@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
-#from utils.zed_camera import ZedCamera
+from utils.zed_camera import ZedCamera
 
 # --- 1. CONFIGURATION ---
 
@@ -175,19 +175,70 @@ def get_square(warped, row, col, square_px):
     return warped[upper_border : upper_border + square_px, left_border : left_border + square_px]
 
 
+def detect_pieces(warped, square_px):
+    board_state = np.zeros((8,8),dtype=int)
+
+    for row in range(8):
+        for col in range(8):
+            cx = int(col*square_px+square_px/2)
+            cy = int(row*square_px+square_px/2)
+
+            region_size = 20 // 2 #pixel size of window
+            region = warped[cy-region_size:cy+region_size, cx-region_size:cx+region_size]
+            avg_color = region.mean(axis=(0,1))
+
+            b,g,r = avg_color[:3]
+            total = b+g+r
+
+            #classify by color
+            if g > r +30 and b > r+30 and total>130: #green piece, shows up turquoise ish
+                board_state[row,col] = 1
+            elif r > b +30 and g > b+30 and total<400: #yellow
+                board_state[row,col] = 2
+            elif r > b+30 and r > g+30: #red
+                board_state[row,col] = 2
+            
+            print(f"Current square:{row}, {col}\nRGB val: {r},{g},{b}\nSum: {total}")
+    return board_state
+
+
+def draw_piece_detected(warped, board_state, square_px):
+    overlay = warped.copy()
+
+    for r in range(8):
+        for c in range(8):
+
+            cx = int(c*square_px+square_px/2)
+            cy = int(r*square_px+square_px/2)
+
+            val = board_state[r,c]
+
+            if val == 1: #we found a green piece
+                cv2.circle(overlay, (cx,cy), 12, (255,0,255),-1)
+
+            elif val == 2: #red/yellow
+                cv2.circle(overlay, (cx,cy), 12, (255,0,0),-1)
+
+            else:
+                cv2.rectangle(overlay, (cx-10,cy-10), (cx+10,cy+10),(0,0,255),3 )
+    
+    return overlay
 
 
 # --- 3. MAIN ---
 
 def main():
-   # zed = ZedCamera()
+    zed = ZedCamera()
    # camera_intrinsic = zed.camera_intrinsic
     detector = Detector(families='tag36h11 tag25h9')
 
     camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
 
     try:
-        cv_image = np.load("sample_image.npy")
+        #cv_image = np.load("sample_image.npy")
+        cv_image = zed.image
+
+        np.save("top_down.npy", cv_image)
 
         gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
         tags = detector.detect(gray)
@@ -203,6 +254,9 @@ def main():
         t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
         if t_board_to_cam is None:
             print("Chessboard tags (4-7) not found.")
+            resized_img = cv2.resize(cv_image, (1080, 700))
+            cv2.imshow('Robot Calibration', resized_img)        
+            cv2.waitKey(0)
             return
 
         # 3. Compute Centers in Robot Frame
@@ -232,6 +286,15 @@ def main():
         output_square_px = 100
 
         warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
+        
+        if np.isnan(warped).any():
+            print(f"{np.isnan(warped).sum()} NaN pixels found in warped")
+        else:
+            print("No NaN detected in warped")
+        #Comment this out to remove piece detection
+        board_state = detect_pieces(warped, output_square_px)
+        warped_with_pieces = draw_piece_detected(warped, board_state, output_square_px)
+    
 
         for pt in img_corners:
             cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
@@ -249,7 +312,7 @@ def main():
                 cv2.rectangle(overlay, top_left, bottom_right, color, -1)
 
         # Blend: 0.5 (original) + 0.5 (overlay)
-        warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
+        #warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
 
         square = get_square(warped, 2, 3, output_square_px)
 
@@ -258,7 +321,8 @@ def main():
         cv2.imshow('Robot Calibration', resized_img)
         cv2.waitKey(0)
 
-        cv2.imshow("Warped Chessboard", warped)
+        #cv2.imshow("Warped Chessboard", warped)
+        cv2.imshow('Warped with Piece Detection', warped_with_pieces)
         cv2.waitKey(0)
 
         cv2.imshow("Row 2 Col 3", square)
