@@ -169,12 +169,6 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     #img corners are in 2d image space i think
     return warped, img_corners
 
-def get_square(warped, row, col, square_px):
-    upper_border = square_px * row
-    left_border = square_px * col
-    return warped[upper_border : upper_border + square_px, left_border : left_border + square_px]
-
-
 def detect_pieces(warped, square_px):
     board_state = np.zeros((8,8),dtype=int)
 
@@ -222,6 +216,20 @@ def draw_piece_detected(warped, board_state, square_px):
                 cv2.rectangle(overlay, (cx-10,cy-10), (cx+10,cy+10),(0,0,255),3 )
     
     return overlay
+
+def compare_board_states(old_state, new_state):
+    one_removals = []
+    two_removals = []
+    one_additions = []
+    two_additions = []
+
+    one_removals = np.argwhere((old_state == 1) & (new_state != 1))
+    one_additions = np.argwhere((old_state != 1) & (new_state == 1))
+
+    two_removals = np.argwhere((old_state == 2) & (new_state != 2))
+    two_additions = np.argwhere((old_state != 2) & (new_state == 2))
+
+    return one_removals, two_removals, one_additions, two_additions
 
 
 def get_board_state(cv_image, detector, camera_intrinsic):
@@ -299,18 +307,11 @@ def get_board_state(cv_image, detector, camera_intrinsic):
     # Blend: 0.5 (original) + 0.5 (overlay)
     #warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
 
-    square = get_square(warped, 2, 3, output_square_px)
-
-    
-
     cv2.imshow('Robot Calibration', resized_img)
     cv2.waitKey(0)
 
     #cv2.imshow("Warped Chessboard", warped)
     cv2.imshow('Warped with Piece Detection', warped_with_pieces)
-    cv2.waitKey(0)
-
-    cv2.imshow("Row 2 Col 3", square)
     cv2.waitKey(0)
 
     return board_state
@@ -341,6 +342,11 @@ def main():
         print(board_state_2)
 
         cv2.waitKey(0)
+
+        one_removals, two_removals, one_additions, two_additions = compare_board_states(board_state, board_state_2)
+
+        print(one_removals)
+        print(two_removals)
 
 
 
