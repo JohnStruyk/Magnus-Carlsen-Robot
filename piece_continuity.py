@@ -280,10 +280,6 @@ def get_board_state(cv_image, detector, camera_intrinsic):
 
     warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
     
-    if np.isnan(warped).any():
-        print(f"{np.isnan(warped).sum()} NaN pixels found in warped")
-    else:
-        print("No NaN detected in warped")
     #Comment this out to remove piece detection
     board_state = detect_pieces(warped, output_square_px)
     warped_with_pieces = draw_piece_detected(warped, board_state, output_square_px)
@@ -326,27 +322,32 @@ def main():
 
     camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
 
+    prior_board_state = np.zeros((8, 8))
+
     try:
-        cv_image = zed.image
+        while True:
 
-        board_state = get_board_state(cv_image, detector, camera_intrinsic) # These are the center locations of the chess board squares relative to the robot frame
+            cv_image = zed.image
 
-        print(board_state)
+            board_state = get_board_state(cv_image, detector, camera_intrinsic) # These are the center locations of the chess board squares relative to the robot frame
 
-        cv2.waitKey(0)
+            print(board_state)
 
-        cv_image_2 = zed.image
+            one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
 
-        board_state_2 = get_board_state(cv_image_2, detector, camera_intrinsic)
+            key_pressed = cv2.waitKey(0)
+            if key_pressed == ord('k'):
+                break
 
-        print(board_state_2)
+            cv2.destroyAllWindows()
 
-        cv2.waitKey(0)
+            prior_board_state = board_state
 
-        one_removals, two_removals, one_additions, two_additions = compare_board_states(board_state, board_state_2)
+            print(f"one_removals: {one_removals}")
+            print(f"two_removals: {two_removals}")
+            print(f"one_additions: {one_additions}")
+            print(f"two_additions: {two_additions}")
 
-        print(one_removals)
-        print(two_removals)
 
 
 
