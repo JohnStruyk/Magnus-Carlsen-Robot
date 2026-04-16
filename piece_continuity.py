@@ -198,7 +198,6 @@ def detect_pieces(warped, square_px):
             elif r > b+30 and r > g+30: #red
                 board_state[row,col] = 2
             
-            print(f"Current square:{row}, {col}\nRGB val: {r},{g},{b}\nSum: {total}")
     return board_state
 
 
@@ -332,6 +331,19 @@ def main():
         board_state = get_board_state(cv_image, detector, camera_intrinsic) # These are the center locations of the chess board squares relative to the robot frame
 
         print(board_state)
+
+        cv2.waitKey(0)
+
+        cv_image_2 = zed.image
+
+        board_state_2 = get_board_state(cv_image_2, detector, camera_intrinsic)
+
+        print(board_state_2)
+
+        cv2.waitKey(0)
+
+
+
     finally:
         cv2.destroyAllWindows()
 
