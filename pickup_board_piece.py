@@ -8,11 +8,9 @@ from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
 from piece_continuity import (
-    BOARD_CONFIG,
     ROBOT_CALIB_CONFIG,
     detect_pieces,
     get_4x4_transform,
-    get_board_centers_local,
     get_warped,
 )
 from utils.zed_camera import ZedCamera
@@ -30,12 +28,29 @@ PLACE_Z_OFFSET = 0.002
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
-ARM_SPEED_TRAVEL_MM_S = 3200
-ARM_SPEED_DESCEND_MM_S = 550
+ARM_SPEED_TRAVEL_MM_S = 450
+ARM_SPEED_DESCEND_MM_S = 140
 GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
+
+# Hardcoded board geometry
+BOARD_SIZE_M = 14.0 * 0.0254
+SQUARE_SIZE_M = BOARD_SIZE_M / 8.0
+
+# Board tag IDs used for board pose (BL, TL, BR, TR in board frame).
+BOARD_TAG_IDS = [0, 1, 2, 3]
+BOARD_POSE_CONFIG = {
+    "tag_size": 0.0265,
+    "tag_ids": BOARD_TAG_IDS,
+    "tag_centers": {
+        0: [0.0, 0.0],  # bottom-left corner reference
+        1: [0.0, BOARD_SIZE_M],
+        2: [BOARD_SIZE_M, 0.0],
+        3: [BOARD_SIZE_M, BOARD_SIZE_M],
+    },
+}
 
 
 def move_to_pose(arm: XArmAPI, t_robot_target: np.ndarray, z_offset_m: float, descend_speed: int):
@@ -129,6 +144,20 @@ def square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, row, col
     return pose
 
 
+def get_board_centers_local_14in():
+    """
+    Build 8x8 square centers for a 14in x 14in board in board frame.
+    """
+    centers = []
+    half_square = SQUARE_SIZE_M * 0.5
+    for row in range(8):
+        for col in range(8):
+            x = half_square + (row * SQUARE_SIZE_M)
+            y = half_square + (col * SQUARE_SIZE_M)
+            centers.append([x, y, 0.0, 1.0])
+    return np.array(centers, dtype=np.float32)
+
+
 def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, preview=False):
     piece_name = normalize_piece_type(piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
@@ -158,7 +187,9 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
             raise RuntimeError("Robot calibration tags not found.")
         t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
 
-        t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, CAMERA_INTRINSIC, strict=True)
+        t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
+            tags, BOARD_POSE_CONFIG, CAMERA_INTRINSIC, strict=True
+        )
         if t_board_to_cam is None:
             raise RuntimeError("Board calibration tags not found.")
 
@@ -168,7 +199,7 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         if from_detected == 0:
             raise RuntimeError(f"Source square {from_square} appears empty.")
 
-        local_centers = get_board_centers_local(BOARD_CONFIG)
+        local_centers = get_board_centers_local_14in()
         from_pose = square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, from_row, from_col)
         to_pose = square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, to_row, to_col)
 
