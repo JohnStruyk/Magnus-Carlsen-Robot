@@ -218,10 +218,6 @@ def draw_piece_detected(warped, board_state, square_px):
     return overlay
 
 def compare_board_states(old_state, new_state):
-    one_removals = []
-    two_removals = []
-    one_additions = []
-    two_additions = []
 
     one_removals = np.argwhere((old_state == 1) & (new_state != 1))
     one_additions = np.argwhere((old_state != 1) & (new_state == 1))
@@ -230,6 +226,39 @@ def compare_board_states(old_state, new_state):
     two_additions = np.argwhere((old_state != 2) & (new_state == 2))
 
     return one_removals, two_removals, one_additions, two_additions
+
+def determine_move(one_removals, two_removals, one_additions, two_additions):
+
+    if len(one_additions) + len(two_additions) > len(one_removals) + len(two_removals):
+        return "BAD. there are more pieces now than at start of move"
+
+    if len(one_additions) + len(two_additions) + 1 < len(one_removals) + len(two_removals):
+        return "BAD. too many pieces removed"
+
+    if len(one_additions) > 0 and len(two_additions) > 0:
+        return "BAD. both color pieces have moved."
+
+    if len(one_removals) + len(two_removals) == 0:
+        return "BAD. neither color piece has moved."
+
+    if len(one_removals) == 1 and len(one_additions) == 1:
+        if len(two_removals) == 1:
+            return "FINE. team one captured a piece."
+        else:
+            return "FINE. team one made a normal move."
+
+    if len(one_removals) == 2 and len(one_additions) == 2:
+        return "FINE. team one tried to castle."
+
+    if len(two_removals) == 1 and len(two_additions) == 1:
+        if len(one_removals) == 1:
+            return "FINE. team two captured a piece."
+        else:
+            return "FINE. team two made a normal move."
+
+    if len(two_removals) == 2 and len(two_additions) == 2:
+        return "FINE. team two tried to castle."
+
 
 
 def get_board_state(cv_image, detector, camera_intrinsic):
@@ -322,7 +351,9 @@ def main():
 
     camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
 
-    prior_board_state = np.zeros((8, 8))
+    init_image = zed.image
+
+    prior_board_state = get_board_state(init_image, detector, camera_intrinsic)
 
     try:
         while True:
