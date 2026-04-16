@@ -158,6 +158,33 @@ def get_board_centers_local_14in():
     return np.array(centers, dtype=np.float32)
 
 
+def show_preview(warped, from_row, from_col, to_row, to_col):
+    """
+    Display warped board with source/destination overlays.
+    """
+    preview_img = warped.copy()
+    square_px = warped.shape[0] // 8
+
+    def square_rect(row, col):
+        x0 = col * square_px
+        y0 = row * square_px
+        x1 = x0 + square_px
+        y1 = y0 + square_px
+        return x0, y0, x1, y1
+
+    fx0, fy0, fx1, fy1 = square_rect(from_row, from_col)
+    tx0, ty0, tx1, ty1 = square_rect(to_row, to_col)
+    cv2.rectangle(preview_img, (fx0, fy0), (fx1, fy1), (0, 255, 255), 3)
+    cv2.rectangle(preview_img, (tx0, ty0), (tx1, ty1), (255, 0, 0), 3)
+    cv2.putText(preview_img, "FROM", (fx0 + 4, fy0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(preview_img, "TO", (tx0 + 4, ty0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+    cv2.imshow("Warped board", preview_img)
+    key = cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    return key == ord("k")
+
+
 def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, preview=False):
     piece_name = normalize_piece_type(piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
@@ -195,9 +222,16 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
 
         warped, _ = get_warped(img, b_rvec, b_tvec, CAMERA_INTRINSIC, square_px=100)
         board_state = detect_pieces(warped, square_px=100)
+        should_execute = True
+        if preview:
+            should_execute = show_preview(warped, from_row, from_col, to_row, to_col)
+
         from_detected = int(board_state[from_row, from_col])
         if from_detected == 0:
-            raise RuntimeError(f"Source square {from_square} appears empty.")
+            raise RuntimeError(
+                f"Source square {from_square} appears empty. "
+                f"Detected value={from_detected}."
+            )
 
         local_centers = get_board_centers_local_14in()
         from_pose = square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, from_row, from_col)
@@ -206,12 +240,6 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         print(f"Moving {piece_name} from {from_square} to {to_square}")
         print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
         print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
-
-        should_execute = True
-        if preview:
-            cv2.imshow("Warped board", warped)
-            should_execute = cv2.waitKey(0) == ord("k")
-            cv2.destroyAllWindows()
 
         if should_execute:
             pickup_pose(arm, from_pose)
