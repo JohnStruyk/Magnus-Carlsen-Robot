@@ -19,19 +19,19 @@ ROBOT_CALIB_CONFIG = {
 
 # Chessboard Calibration (4 tags on board to establish board-to-camera)
 BOARD_CONFIG = {
-    "tag_size": 0.0265,        
-    "square_size": 0.025,    
+    "tag_size": 0.05867,        
+    "square_size": 0.04365,    
     "grid_size": (8, 8),     
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
         0: [0.0, 0.0],       # Origin: Bottom-Left Tag
-        1: [0.0, 0.15572],       # Top Left
-        2: [0.23713, 0.0],      # Bottom-Right
-        3: [0.23713, 0.15572]       # Top-Right
+        1: [0.0, 0.277],       # Top Left
+        2: [0.52848, 0.0],      # Bottom-Right
+        3: [0.52848, 0.277]       # Top-Right
     },
-    # Offset from Tag 0 center to the center of the first chessboard square (0,0)
+    # Offset from Tag 0 center to the bottom left corner of the first chessboard square (0,0)
     #"grid_origin_offset": [0.03, -0.008] 
-    "grid_origin_offset": [0.0175, -0.0205] 
+    "grid_origin_offset": [0.0889, -0.0381] 
 }
 
 TAG_WIDTH_OFFSET = 17.5
