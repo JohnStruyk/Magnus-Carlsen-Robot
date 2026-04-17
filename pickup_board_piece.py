@@ -22,7 +22,7 @@ CAMERA_INTRINSIC = np.array(
     ((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)),
     dtype=np.float32,
 )
-ROBOT_IP_DEFAULT = "192.168.1.168"
+ROBOT_IP_DEFAULT = "192.168.1.159"
 SAFE_Z = 0.22
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
@@ -206,20 +206,15 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
     to_row, to_col = algebraic_to_row_col(to_square)
 
     zed = ZedCamera()
-    arm = XArmAPI(robot_ip)
-    arm.connect()
-    arm.motion_enable(enable=True)
-    arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
-    arm.set_mode(0)
-    arm.set_state(0)
-    arm.move_gohome(wait=True)
-    time.sleep(0.5)
+    arm = None
 
     try:
+        print("[pickup] Capturing camera image...")
         img = zed.image
         if img is None:
             raise RuntimeError("No image from ZED.")
 
+        print("[pickup] Running piece_continuity vision mapping...")
         vision = build_vision_from_piece_continuity(img, CAMERA_INTRINSIC)
         if vision is None:
             raise RuntimeError("Vision failed in piece_continuity (missing playmat/board tags).")
@@ -229,6 +224,7 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         robot_frame_centers = vision["robot_frame_centers"]
         should_execute = True
         if preview:
+            print("[pickup] Showing preview window (press 'k' to execute)...")
             should_execute = show_preview(img, warped, from_row, from_col, to_row, to_col)
 
         from_detected = int(board_state[from_row, from_col])
@@ -246,15 +242,26 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
 
         if should_execute:
+            print("[pickup] Connecting to arm...")
+            arm = XArmAPI(robot_ip)
+            arm.connect()
+            arm.motion_enable(enable=True)
+            arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+            arm.set_mode(0)
+            arm.set_state(0)
+            arm.move_gohome(wait=True)
+            time.sleep(0.5)
+            print("[pickup] Executing pick/place motion...")
             pickup_pose(arm, from_pose)
             place_pose(arm, to_pose)
         else:
             print("Cancelled (press 'k' in preview to execute).")
     finally:
-        arm.stop_lite6_gripper()
-        arm.move_gohome(wait=True)
-        time.sleep(0.5)
-        arm.disconnect()
+        if arm is not None:
+            arm.stop_lite6_gripper()
+            arm.move_gohome(wait=True)
+            time.sleep(0.5)
+            arm.disconnect()
         zed.close()
         cv2.destroyAllWindows()
 
