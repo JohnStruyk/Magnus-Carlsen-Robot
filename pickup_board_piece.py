@@ -7,9 +7,9 @@ from pupil_apriltags import Detector
 from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
-from checkpoint0 import TAG_CENTER_COORDINATES, TAG_SIZE
 from piece_continuity import (
     BOARD_CONFIG,
+    ROBOT_CALIB_CONFIG,
     detect_pieces,
     get_4x4_transform,
     get_board_centers_local,
@@ -36,23 +36,6 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
-
-# Large playmat tags (robot/world frame definition) from checkpoint0.py.
-# checkpoint0 ordering is [top-left, top-right, bottom-left, bottom-right].
-PLAYMAT_POSE_CONFIG = {
-    "tag_size": TAG_SIZE,
-    "tag_ids": [0, 1, 2, 3],
-    "tag_centers": {
-        0: TAG_CENTER_COORDINATES[0],
-        1: TAG_CENTER_COORDINATES[1],
-        2: TAG_CENTER_COORDINATES[2],
-        3: TAG_CENTER_COORDINATES[3],
-    },
-}
-
-# Small board tags / square geometry from piece_continuity.py.
-BOARD_POSE_CONFIG = BOARD_CONFIG
-
 
 def move_to_pose(arm: XArmAPI, t_robot_target: np.ndarray, z_offset_m: float, descend_speed: int):
     xyz = t_robot_target[:3, 3]
@@ -135,14 +118,45 @@ def normalize_piece_type(piece_type):
     return mapping[value]
 
 
-def square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, row, col):
+def square_to_robot_pose(robot_frame_centers, row, col):
     idx = row * 8 + col
-    p_local = local_centers[idx]
-    p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
+    p_robot = robot_frame_centers[idx]
     pose = np.eye(4, dtype=np.float32)
-    pose[:3, :3] = t_cam_to_robot[:3, :3] @ t_board_to_cam[:3, :3]
-    pose[:3, 3] = p_robot[:3]
+    pose[:3, :3] = np.eye(3, dtype=np.float32)
+    pose[:3, 3] = np.array(p_robot[:3], dtype=np.float32)
     return pose
+
+
+def build_vision_from_piece_continuity(img, camera_intrinsic):
+    """
+    Build board mapping/state strictly from existing piece_continuity functions.
+    """
+    detector = Detector(families="tag36h11 tag25h9")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[-1] == 4 else cv2.COLOR_BGR2GRAY)
+    tags = detector.detect(gray)
+
+    t_robot_to_cam, _, _ = get_4x4_transform(tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False)
+    if t_robot_to_cam is None:
+        return None
+    t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
+
+    t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
+    if t_board_to_cam is None:
+        return None
+
+    local_centers = get_board_centers_local(BOARD_CONFIG)
+    robot_frame_centers = {}
+    for i, p_local in enumerate(local_centers):
+        p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
+        robot_frame_centers[i] = p_robot[:3].tolist()
+
+    warped, _ = get_warped(img, b_rvec, b_tvec, camera_intrinsic, square_px=100)
+    board_state = detect_pieces(warped, square_px=100)
+    return {
+        "warped": warped,
+        "board_state": board_state,
+        "robot_frame_centers": robot_frame_centers,
+    }
 
 
 def show_preview(warped, from_row, from_col, to_row, to_col):
@@ -190,8 +204,6 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
     to_row, to_col = algebraic_to_row_col(to_square)
 
     zed = ZedCamera()
-    playmat_detector = Detector(families="tag36h11")
-    board_detector = Detector(families="tag25h9")
     arm = XArmAPI(robot_ip)
     arm.connect()
     arm.motion_enable(enable=True)
@@ -206,25 +218,13 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         if img is None:
             raise RuntimeError("No image from ZED.")
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[-1] == 4 else cv2.COLOR_BGR2GRAY)
-        playmat_tags = playmat_detector.detect(gray)
-        board_tags = board_detector.detect(gray)
+        vision = build_vision_from_piece_continuity(img, CAMERA_INTRINSIC)
+        if vision is None:
+            raise RuntimeError("Vision failed in piece_continuity (missing playmat/board tags).")
 
-        t_playmat_to_cam, _, _ = get_4x4_transform(
-            playmat_tags, PLAYMAT_POSE_CONFIG, CAMERA_INTRINSIC, strict=True
-        )
-        if t_playmat_to_cam is None:
-            raise RuntimeError("Playmat tags not found. Need all 4 large tags visible.")
-        t_cam_to_robot = np.linalg.inv(t_playmat_to_cam)
-
-        t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-            board_tags, BOARD_POSE_CONFIG, CAMERA_INTRINSIC, strict=True
-        )
-        if t_board_to_cam is None:
-            raise RuntimeError("Board tags not found. Need all 4 small board-corner tags visible.")
-
-        warped, _ = get_warped(img, b_rvec, b_tvec, CAMERA_INTRINSIC, square_px=100)
-        board_state = detect_pieces(warped, square_px=100)
+        warped = vision["warped"]
+        board_state = vision["board_state"]
+        robot_frame_centers = vision["robot_frame_centers"]
         should_execute = True
         if preview:
             should_execute = show_preview(warped, from_row, from_col, to_row, to_col)
@@ -236,9 +236,8 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
                 f"Detected value={from_detected}."
             )
 
-        local_centers = get_board_centers_local(BOARD_POSE_CONFIG)
-        from_pose = square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, from_row, from_col)
-        to_pose = square_to_robot_pose(local_centers, t_cam_to_robot, t_board_to_cam, to_row, to_col)
+        from_pose = square_to_robot_pose(robot_frame_centers, from_row, from_col)
+        to_pose = square_to_robot_pose(robot_frame_centers, to_row, to_col)
 
         print(f"Moving {piece_name} from {from_square} to {to_square}")
         print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
