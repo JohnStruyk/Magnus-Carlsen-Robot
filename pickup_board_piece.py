@@ -159,7 +159,7 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
     }
 
 
-def show_preview(warped, from_row, from_col, to_row, to_col):
+def show_preview(raw_img, warped, from_row, from_col, to_row, to_col):
     """
     Display warped board with source/destination overlays.
     """
@@ -191,7 +191,9 @@ def show_preview(warped, from_row, from_col, to_row, to_col):
             interpolation=cv2.INTER_AREA,
         )
 
+    cv2.namedWindow("Raw camera", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Warped board", cv2.WINDOW_NORMAL)
+    cv2.imshow("Raw camera", raw_img)
     cv2.imshow("Warped board", preview_img)
     key = cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -227,7 +229,7 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         robot_frame_centers = vision["robot_frame_centers"]
         should_execute = True
         if preview:
-            should_execute = show_preview(warped, from_row, from_col, to_row, to_col)
+            should_execute = show_preview(img, warped, from_row, from_col, to_row, to_col)
 
         from_detected = int(board_state[from_row, from_col])
         if from_detected == 0:
