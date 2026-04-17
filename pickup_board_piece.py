@@ -28,9 +28,25 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-# Playmat vs chessboard use different AprilTag families; both use ids 0–3 (see checkpoint0).
+# --- How square positions reach the arm ---
+# 1) Playmat PnP (checkpoint0): camera <- playmat frame using TAG_CENTER_COORDINATES + playmat tag edge.
+# 2) Board PnP (piece_continuity): camera <- board frame using BOARD_CONFIG tag_centers + chess tag edge.
+# 3) Chain: p_robot = inv(T_cam_playmat) @ T_board_to_cam @ p_square  (playmat frame == robot frame here).
+# 4) Gripper pose uses that XYZ + board orientation; TCP length is set on the arm.
+# If vision looks right but the arm is shifted or Z is wrong: wrong *physical tag sizes* in PnP, or
+# BOARD_CONFIG grid_origin_offset / square_size not matching the real board, or residual hand–eye error.
+
+# Measured outer edge of printed tags (meters). Wrong values break PnP depth and XY scale.
+PLAYMAT_TAG_EDGE_M = 0.08
+BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
+# Optional: set to ruler-measured square size if it differs from piece_continuity BOARD_CONFIG.
+CHESS_SQUARE_SIZE_M = None
+
+# Last-mile bias in robot/playmat frame (meters): tune if XY is consistently offset or Z hits the table.
+HAND_EYE_XYZ_BIAS_M = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
 ROBOT_IP_DEFAULT = "192.168.1.159"
+# Minimum height (m) for horizontal moves; increase if the tool still touches the table during travel.
 SAFE_Z = 0.22
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
@@ -127,13 +143,21 @@ def normalize_piece_type(piece_type):
     return mapping[value]
 
 
+def _board_config_for_pickup():
+    """BOARD_CONFIG with measured chessboard tag edge (and optional square size)."""
+    cfg = {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
+    if CHESS_SQUARE_SIZE_M is not None:
+        cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
+    return cfg
+
+
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
     """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
     idx = row * 8 + col
-    p_robot = robot_frame_centers[idx]
+    p_robot = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
     pose = np.eye(4, dtype=np.float32)
     pose[:3, :3] = t_robot_board[:3, :3].astype(np.float32)
-    pose[:3, 3] = np.array(p_robot[:3], dtype=np.float32)
+    pose[:3, 3] = p_robot.astype(np.float32)
     return pose
 
 
@@ -160,13 +184,20 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         print(f"[pickup] Raw chess ids: {sorted(set(int(t.tag_id) for t in chess_raw))}")
         return None
     print(f"[pickup] {split_msg}")
+    board_cfg = _board_config_for_pickup()
+    print(
+        f"[pickup] Calibration: playmat edge={PLAYMAT_TAG_EDGE_M} m, board edge={board_cfg['tag_size']} m, "
+        f"square={board_cfg['square_size']} m, hand-eye bias (m)={HAND_EYE_XYZ_BIAS_M.tolist()}"
+    )
 
-    t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
+    t_cam_robot = get_transform_camera_robot_from_tags(
+        playmat_tags, camera_intrinsic, tag_edge_m=PLAYMAT_TAG_EDGE_M
+    )
     if t_cam_robot is None:
         return None
 
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-        board_tags, BOARD_CONFIG, camera_intrinsic, strict=True
+        board_tags, board_cfg, camera_intrinsic, strict=True
     )
     if t_board_to_cam is None:
         print("[pickup] Board PnP failed (need 4 board corners visible).")
@@ -176,7 +207,7 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
     t_robot_cam = np.linalg.inv(t_cam_robot)
     t_robot_board = t_robot_cam @ t_board_to_cam
 
-    local_centers = get_board_centers_local(BOARD_CONFIG)
+    local_centers = get_board_centers_local(board_cfg)
     robot_frame_centers = {}
     for i, p_local in enumerate(local_centers):
         p_robot = t_robot_cam @ (t_board_to_cam @ p_local)

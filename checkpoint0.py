@@ -21,10 +21,14 @@ TAG_CENTER_COORDINATES = [[0.38, 0.4],
                          [0.0, 0.4],
                          [0.0, -0.4]]
 
-def get_pnp_pairs(tags):
+def get_pnp_pairs(tags, tag_edge_m=None):
     """
     3D–2D pairs for **playmat** tags only (PLAYMAT_TAG_FAMILY), ids 0–3.
+
+    ``tag_edge_m``: physical tag edge in meters (defaults to ``TAG_SIZE``).
     """
+    edge = float(tag_edge_m) if tag_edge_m is not None else float(TAG_SIZE)
+    half = edge / 2.0
     world_points = numpy.empty([0, 3])
     image_points = numpy.empty([0, 2])
 
@@ -36,8 +40,8 @@ def get_pnp_pairs(tags):
 
         # Bottom left corner
         wp = numpy.zeros(3)
-        wp[0] = tag_center[0] - (TAG_SIZE / 2)
-        wp[1] = tag_center[1] + (TAG_SIZE / 2)
+        wp[0] = tag_center[0] - half
+        wp[1] = tag_center[1] + half
 
         ip = tag.corners[0]
 
@@ -46,8 +50,8 @@ def get_pnp_pairs(tags):
 
         # Bottom right corner
         wp = numpy.zeros(3)
-        wp[0] = tag_center[0] - (TAG_SIZE / 2)
-        wp[1] = tag_center[1] - (TAG_SIZE / 2)
+        wp[0] = tag_center[0] - half
+        wp[1] = tag_center[1] - half
 
         ip = tag.corners[1]
 
@@ -56,8 +60,8 @@ def get_pnp_pairs(tags):
 
         # Top right corner
         wp = numpy.zeros(3)
-        wp[0] = tag_center[0] + (TAG_SIZE / 2)
-        wp[1] = tag_center[1] - (TAG_SIZE / 2)
+        wp[0] = tag_center[0] + half
+        wp[1] = tag_center[1] - half
 
         ip = tag.corners[2]
 
@@ -66,8 +70,8 @@ def get_pnp_pairs(tags):
 
         # Top left corner
         wp = numpy.zeros(3)
-        wp[0] = tag_center[0] + (TAG_SIZE / 2)
-        wp[1] = tag_center[1] + (TAG_SIZE / 2)
+        wp[0] = tag_center[0] + half
+        wp[1] = tag_center[1] + half
 
         ip = tag.corners[3]
 
@@ -309,12 +313,14 @@ def partition_playmat_and_board_tags(
     )
 
 
-def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
+def get_transform_camera_robot_from_tags(tags, camera_intrinsic, tag_edge_m=None):
     """
     Same as get_transform_camera_robot but uses an existing tag list (no second detect).
     Pass playmat-family tags with ids 0–3 (one per corner after best_tag_per_id_0_3).
+
+    ``tag_edge_m``: physical playmat AprilTag edge length (meters); must match prints.
     """
-    world_points, image_points = get_pnp_pairs(tags)
+    world_points, image_points = get_pnp_pairs(tags, tag_edge_m=tag_edge_m)
     if world_points.shape[0] < 4:
         print("Insufficient playmat tag corners after filtering (need family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY)
         return None
@@ -331,7 +337,7 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     return transform_mat
 
 
-def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
+def get_transform_camera_robot(observation, camera_intrinsic, tags=None, tag_edge_m=None):
     """
     Calculate the 4x4 transformation matrix from the camera frame to the 
     robot base frame using AprilTag detections.
@@ -369,7 +375,7 @@ def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
     if tags:
         ids = sorted(set(int(t.tag_id) for t in tags))
         print(f"Playmat tag ids: {ids}")
-    world_points, image_points = get_pnp_pairs(tags)
+    world_points, image_points = get_pnp_pairs(tags, tag_edge_m=tag_edge_m)
     if world_points.shape[0] < 4:
         print(f'Insufficient valid tag corners found.')
         return None

@@ -44,8 +44,8 @@ TAG_HEIGHT_OFFSET = -20.5
 
 def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     """Calculates the 4x4 transform matrix from the object to the camera."""
-    target_ids = set(config["tag_ids"])
-    found_tags = [t for t in tags if t.tag_id in target_ids]
+    target_ids = set(int(x) for x in config["tag_ids"])
+    found_tags = [t for t in tags if int(t.tag_id) in target_ids]
     
     # Logic to specify what should happen if not all the tags are seen, want all 4 for the chessboard part
     if strict and len(found_tags) < len(target_ids):
@@ -58,8 +58,8 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     half = config["tag_size"] / 2.0
 
     # Sort tags to ensure consistent mapping
-    for tag in sorted(found_tags, key=lambda x: x.tag_id):
-        cx, cy = config["tag_centers"][tag.tag_id]
+    for tag in sorted(found_tags, key=lambda x: int(x.tag_id)):
+        cx, cy = config["tag_centers"][int(tag.tag_id)]
         # World points for tag corners: BL, BR, TR, TL
         wp_corners = [
             [cx - half, cy - half, 0], 
