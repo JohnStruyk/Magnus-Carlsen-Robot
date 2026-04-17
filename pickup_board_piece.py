@@ -177,10 +177,51 @@ def _board_config_for_pickup():
     return cfg
 
 
+def _warp_cell_center_to_robot_xyz(
+    row: int,
+    col: int,
+    square_px: int,
+    H_warp_to_img: np.ndarray,
+    K: np.ndarray,
+    t_board_to_cam: np.ndarray,
+    t_robot_cam: np.ndarray,
+):
+    """
+    Map the same warped-cell center that ``detect_pieces`` uses to a 3D point in the robot
+    base frame by: warp pixel → raw pixel → ray through camera → intersect board plane
+    (from ``t_board_to_cam``) → ``t_robot_cam``.
+
+    This avoids a mismatch between the 4-corner homography warp and a separate uniform
+    metric grid from ``get_board_centers_local``, which can look fine in preview but skew XY.
+
+    Returns None if the ray is degenerate w.r.t. the board plane (caller should fallback).
+    """
+    u_w = float(col * square_px + square_px * 0.5)
+    v_w = float(row * square_px + square_px * 0.5)
+    pw = np.array([u_w, v_w, 1.0], dtype=np.float64)
+    ph = H_warp_to_img @ pw
+    if abs(ph[2]) < 1e-12:
+        return None
+    u = ph[0] / ph[2]
+    v = ph[1] / ph[2]
+    d = np.linalg.inv(K) @ np.array([u, v, 1.0], dtype=np.float64)
+    R_bc = t_board_to_cam[:3, :3].astype(np.float64)
+    t_bc = t_board_to_cam[:3, 3].astype(np.float64)
+    n = R_bc[:, 2]
+    denom = float(np.dot(n, d))
+    if abs(denom) < 1e-10:
+        return None
+    alpha = float(np.dot(n, t_bc) / denom)
+    p_cam = alpha * d
+    p_cam_h = np.append(p_cam, 1.0)
+    p_robot = (t_robot_cam @ p_cam_h)[:3]
+    return np.asarray(p_robot, dtype=np.float64)
+
+
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
     """
-    Same linear order as get_board_centers_local (nested ``for r: for c:`` → ``r*8+c``) and
-    detect_pieces / warped image: ``row`` = image row (rank 8 at top), ``col`` = file a..h.
+    Index ``row*8+col`` matches ``detect_pieces`` / warped board (rank 8 at top row, file a
+    at col 0). Centers in ``robot_frame_centers`` are homography-ray hits on the board plane.
     """
     idx = row * 8 + col
     p_robot = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
@@ -230,18 +271,34 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
     t_robot_cam = np.linalg.inv(t_cam_robot)
     t_robot_board = t_robot_cam @ t_board_to_cam
 
-    local_centers = get_board_centers_local(board_cfg)
-    robot_frame_centers = {}
-    for i, p_local in enumerate(local_centers):
-        p_robot = t_robot_cam @ (t_board_to_cam @ p_local)
-        robot_frame_centers[i] = p_robot[:3].tolist()
-
     square_px = 100
     warped, _img_corners, H_img_to_warp = get_warped(
         img, b_rvec, b_tvec, camera_intrinsic, square_px=square_px
     )
     # findHomography(img_pts, warp_pts): p_warp ~ H @ p_img → p_img = H^{-1} @ p_warp
     H_warp_to_img = np.linalg.inv(H_img_to_warp)
+
+    # Robot XY follows the same warped grid as detect_pieces / preview quads (ray through
+    # raw pixel, intersect board plane). Pure metric-grid centers can disagree with that warp.
+    local_centers = get_board_centers_local(board_cfg)
+    robot_frame_centers = {}
+    idx = 0
+    for r in range(8):
+        for c in range(8):
+            p_fb = (t_robot_cam @ (t_board_to_cam @ local_centers[idx]))[:3]
+            p_robot = _warp_cell_center_to_robot_xyz(
+                r,
+                c,
+                square_px,
+                H_warp_to_img,
+                camera_intrinsic,
+                t_board_to_cam,
+                t_robot_cam,
+            )
+            if p_robot is None:
+                p_robot = p_fb.astype(np.float64)
+            robot_frame_centers[idx] = p_robot.tolist()
+            idx += 1
     board_state = detect_pieces(warped, square_px=square_px)
     return {
         "warped": warped,
