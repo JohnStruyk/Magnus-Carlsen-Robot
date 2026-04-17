@@ -50,13 +50,13 @@ HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
 # Robot motion (Lite6 + parallel gripper)
 # ---------------------------------------------------------------------------
 ROBOT_IP_DEFAULT = "192.168.1.159"
-SAFE_Z = 0.22
+SAFE_Z = 0.17
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
-MIN_TOOL_Z_M = 0.05
+MIN_TOOL_Z_M = 0.06
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
@@ -67,7 +67,7 @@ GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
 
-# Chesspiece Calibration
+# Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
 PIECE_CONFIG = {
     "king_height": 0.0950214,
     "queen_height": 0.075184,
@@ -76,11 +76,23 @@ PIECE_CONFIG = {
     "rook_height": 0.0455422,
     "pawn_height": 0.0445008,
 }
-# Fraction of physical piece height (m) added along **robot base +Z only** for grasp/place TCP
-# (not board normal — that mostly moved XY and left king/pawn with the same Z).
-PIECE_HEIGHT_GRASP_FRACTION = 0.5
-# +1 if higher pieces need larger base-frame Z; -1 if your Z axis increases downward.
-ROBOT_BASE_Z_UP_SIGN = 1.0
+
+# Static robot-base +Z offset (meters) added at pick/place for each piece — edit these only.
+GRASP_Z_OFFSET_PAWN_M = 0.07126605
+GRASP_Z_OFFSET_KNIGHT_M = 0.08063865
+GRASP_Z_OFFSET_BISHOP_M = 0.08574405
+GRASP_Z_OFFSET_ROOK_M = 0.07204710
+GRASP_Z_OFFSET_QUEEN_M = 0.09427845
+GRASP_Z_OFFSET_KING_M = 0.10915650
+
+PIECE_GRASP_Z_OFFSET_M = {
+    "pawn": GRASP_Z_OFFSET_PAWN_M,
+    "knight": GRASP_Z_OFFSET_KNIGHT_M,
+    "bishop": GRASP_Z_OFFSET_BISHOP_M,
+    "rook": GRASP_Z_OFFSET_ROOK_M,
+    "queen": GRASP_Z_OFFSET_QUEEN_M,
+    "king": GRASP_Z_OFFSET_KING_M,
+}
 
 # Preview: FROM = yellow, TO = blue (BGR)
 _COLOR_FROM_BGR = (0, 255, 255)
@@ -115,14 +127,6 @@ def algebraic_to_row_col(square: str) -> Tuple[int, int]:
     col = ord(square[0].lower()) - ord("a")
     row = 8 - int(square[1])
     return row, col
-
-
-def piece_height_m(piece_name: str) -> float:
-    """Return calibrated height (m) for ``piece_name`` (``pawn``, ``king``, …)."""
-    key = f"{piece_name}_height"
-    if key not in PIECE_CONFIG:
-        raise KeyError(f"No height in PIECE_CONFIG for piece '{piece_name}' (expected key {key!r}).")
-    return float(PIECE_CONFIG[key])
 
 
 def normalize_piece_type(piece_type: str) -> str:
@@ -220,8 +224,10 @@ def compute_robot_frame_centers(
 
 
 def piece_grasp_vertical_offset_m(piece_name: str) -> float:
-    """Vertical (robot base Z) offset for TCP: ``ROBOT_BASE_Z_UP_SIGN * height * fraction`` only."""
-    return ROBOT_BASE_Z_UP_SIGN * piece_height_m(piece_name) * PIECE_HEIGHT_GRASP_FRACTION
+    """Robot base +Z offset (m) for grasp/place from ``PIECE_GRASP_Z_OFFSET_M`` / ``GRASP_Z_OFFSET_*_M``."""
+    if piece_name not in PIECE_GRASP_Z_OFFSET_M:
+        raise KeyError(f"No grasp Z offset for piece '{piece_name}'. Add it to PIECE_GRASP_Z_OFFSET_M.")
+    return float(PIECE_GRASP_Z_OFFSET_M[piece_name])
 
 
 def square_to_robot_pose(
@@ -235,9 +241,7 @@ def square_to_robot_pose(
     4×4 pose in robot base: XY and Z from the board-plane hit (vision), board orientation for yaw.
 
     If ``piece_name`` is set, **only** ``pose[2,3]`` (base Z) is increased by
-    ``piece_grasp_vertical_offset_m(piece_name)``, i.e. a direct fraction of ``PIECE_CONFIG``
-    height. This is independent of board tilt and of ``t_robot_board``'s normal, so king vs
-    pawn get different commanded Z (~25 mm difference at 0.5 fraction with your current heights).
+    ``piece_grasp_vertical_offset_m(piece_name)`` (static per-piece meters, ``GRASP_Z_OFFSET_*_M``).
     """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
@@ -558,10 +562,7 @@ def move_piece(
         )
 
         dz = piece_grasp_vertical_offset_m(piece_name)
-        print(
-            f"Moving {piece_name} {from_square} → {to_square} "
-            f"(piece height {piece_height_m(piece_name):.4f} m, +Z offset {dz * 1000:.2f} mm)"
-        )
+        print(f"Moving {piece_name} {from_square} → {to_square} (grasp +Z offset {dz * 1000:.2f} mm)")
         print(
             f"[pickup] Indices row*8+col: FROM ({from_row},{from_col})={from_row * 8 + from_col}, "
             f"TO ({to_row},{to_col})={to_row * 8 + to_col}"
