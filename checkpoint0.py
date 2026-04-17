@@ -4,8 +4,6 @@ from pupil_apriltags import Detector
 from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
 
-from image_to_fen import *
-
 TAG_SIZE = 0.08
 
 # top-left, top-right, bottom-left, bottom-right
@@ -88,6 +86,87 @@ def get_pnp_pairs(tags):
 
     return world_points, image_points
 
+
+def _tag_polygon_area_sq_px(tag):
+    """Signed area * 2 of quadrilateral; use abs for sort comparisons."""
+    c = tag.corners.astype(numpy.float64)
+    if c.shape[0] < 4:
+        return 0.0
+    return float(abs(cv2.contourArea(c)))
+
+
+def partition_playmat_and_board_tags(tags, board_tag_ids=(4, 5, 6, 7)):
+    """
+    Split detections into four playmat tags (ids 0–3) and four board tags.
+
+    - If board corners use IDs 4–7, playmat = {0,1,2,3}, board = {4,5,6,7}.
+    - Else if board reuses 0–3, expect two detections per ID (mat + board); assign the
+      larger polygon in image space to the playmat (usually closer / larger on ZED).
+
+    Returns (playmat_tags, board_tags, debug_msg). On failure, tags are None and msg explains.
+    """
+    by_id = {}
+    for t in tags:
+        tid = int(t.tag_id)
+        by_id.setdefault(tid, []).append(t)
+
+    board_ids = list(board_tag_ids)
+
+    # Case 1: distinct board IDs (e.g. 4–7)
+    if all(bid in by_id and len(by_id[bid]) >= 1 for bid in board_ids):
+        playmat = []
+        board = []
+        for i in range(4):
+            if i not in by_id:
+                return None, None, f"playmat: missing tag id {i}"
+            cands = sorted(by_id[i], key=_tag_polygon_area_sq_px, reverse=True)
+            playmat.append(cands[0])
+        for bid in board_ids:
+            cands = sorted(by_id[bid], key=_tag_polygon_area_sq_px, reverse=True)
+            board.append(cands[0])
+        return playmat, board, "split: playmat 0-3, board 4-7"
+
+    # Case 2: duplicate 0–3 on mat and board
+    playmat = []
+    board = []
+    for i in range(4):
+        if i not in by_id:
+            return None, None, f"missing tag id {i} (need 0-3 on playmat, and board tags or duplicates)"
+        cands = sorted(by_id[i], key=_tag_polygon_area_sq_px, reverse=True)
+        playmat.append(cands[0])
+        if len(cands) < 2:
+            return (
+                None,
+                None,
+                f"tag id {i}: only one detection; use board tags {board_ids} or print duplicate 0-3 on board",
+            )
+        board.append(cands[1])
+
+    return playmat, board, "split: duplicate 0-3 by larger area -> playmat, smaller -> board"
+
+
+def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
+    """
+    Same as get_transform_camera_robot but uses an existing tag list (no second detect).
+    Pass exactly the four playmat tags (ids 0–3, one each) so board duplicates are excluded.
+    """
+    world_points, image_points = get_pnp_pairs(tags)
+    if world_points.shape[0] < 4:
+        print("Insufficient playmat tag corners after filtering.")
+        return None
+    success, rotation_vec, translation = cv2.solvePnP(
+        world_points, image_points, camera_intrinsic, None
+    )
+    if success is not True:
+        print("PnP Calculation Failed.")
+        return None
+    rotation_mat, _ = cv2.Rodrigues(rotation_vec)
+    transform_mat = numpy.eye(4)
+    transform_mat[:3, :3] = rotation_mat
+    transform_mat[:3, 3] = translation.flatten()
+    return transform_mat
+
+
 def get_transform_camera_robot(observation, camera_intrinsic):
     """
     Calculate the 4x4 transformation matrix from the camera frame to the 
@@ -145,15 +224,6 @@ def main():
     try:
         # Get Observation
         cv_image = zed.image
-        cv_point_cloud = zed.point_cloud
-
-        np.savez("img_n_pc", cv_image=cv_image, cv_point_cloud=cv_point_cloud)
-
-        corners = find_chessboard_with_pattern(cv_image)
-
-        quad = chessboard_corners_to_quad(corners, (7, 7))
-
-        warp_chessboard_from_corners(cv_image, quad, (7, 7))
 
         # Get Transformation
         t_cam_robot = get_transform_camera_robot(cv_image, camera_intrinsic)

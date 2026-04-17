@@ -1,12 +1,3 @@
-"""
-Pick / place using RRC-style geometry:
-  - Playmat (tags 0–3): checkpoint0.get_transform_camera_robot -> T_cam_robot
-  - Board: piece_continuity BOARD_CONFIG geometry with tag IDs BOARD_TAG_IDS (default 4–7)
-    so corners are not confused with playmat tags in one image.
-
-Physical setup: print AprilTags on the board corners as IDs 4,5,6,7 (same layout as
-BOARD_CONFIG corners 0–3). Use ZED left-camera intrinsics from ZedCamera.
-"""
 import argparse
 import time
 
@@ -16,7 +7,10 @@ from pupil_apriltags import Detector
 from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
-from checkpoint0 import get_transform_camera_robot
+from checkpoint0 import (
+    get_transform_camera_robot_from_tags,
+    partition_playmat_and_board_tags,
+)
 from piece_continuity import (
     BOARD_CONFIG,
     detect_pieces,
@@ -27,9 +21,11 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-# RRC-style geometry: playmat gives T_cam_robot via checkpoint0; board gives T_cam_board via piece_continuity.
-# Board tags must NOT share IDs 0–3 with the playmat or PnP will mix corners. Default: board corners use IDs 4–7
-# mapped to the same physical layout as BOARD_CONFIG tag_centers 0–3.
+# RRC-style geometry: playmat -> T_cam_robot; board -> T_cam_board (piece_continuity).
+# All tags use the same AprilTag family; playmat vs board is by *tag ID* (different codes):
+#   - Preferred: playmat ids 0–3, board corners ids 4–7 (BOARD_TAG_IDS below).
+#   - Or: board reuses 0–3 → need two physical tags per id; partition keeps larger polygon as playmat.
+APRILTAG_FAMILY = "tag36h11"
 BOARD_TAG_IDS = [4, 5, 6, 7]
 
 ROBOT_IP_DEFAULT = "192.168.1.159"
@@ -147,6 +143,18 @@ def _board_config_for_pnp():
     }
 
 
+def _board_pnp_config_for_detections(board_tags):
+    """Use piece_continuity BOARD_CONFIG when board tags are 0–3; else remapped 4–7 layout."""
+    ids = {int(t.tag_id) for t in board_tags}
+    if ids == set(range(4)):
+        return BOARD_CONFIG
+    if ids == set(BOARD_TAG_IDS):
+        return _board_config_for_pnp()
+    raise ValueError(
+        f"Board tags must be ids 0-3 or {BOARD_TAG_IDS}; got {sorted(ids)}"
+    )
+
+
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
     """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
     idx = row * 8 + col
@@ -165,19 +173,37 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
       - Point in robot base: p_robot = inv(T_cam_robot) @ T_cam_board @ p_board
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[-1] == 4 else cv2.COLOR_BGR2GRAY)
-    detector = Detector(families="tag36h11")
-    tags = detector.detect(gray)
 
-    # Playmat: same PnP as checkpoint0 / RRC (tags 0–3 on mat only).
-    t_cam_robot = get_transform_camera_robot(img, camera_intrinsic)
+    detector = Detector(families=APRILTAG_FAMILY)
+    tags = detector.detect(gray)
+    playmat_tags, board_tags, split_msg = partition_playmat_and_board_tags(
+        tags, board_tag_ids=tuple(BOARD_TAG_IDS)
+    )
+    if playmat_tags is None or board_tags is None:
+        print(f"[pickup] Tag split failed: {split_msg}")
+        print(
+            f"[pickup] {APRILTAG_FAMILY} detected ids: "
+            f"{sorted(set(int(t.tag_id) for t in tags))} (n={len(tags)})"
+        )
+        return None
+    print(f"[pickup] Tag split OK: {split_msg}")
+
+    t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
     if t_cam_robot is None:
         return None
 
-    board_cfg = _board_config_for_pnp()
+    try:
+        board_cfg = _board_pnp_config_for_detections(board_tags)
+    except ValueError as e:
+        print(f"[pickup] {e}")
+        return None
+
+    # Pass only board tags so duplicate 0–3 on mat+board are not merged in PnP.
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-        tags, board_cfg, camera_intrinsic, strict=True
+        board_tags, board_cfg, camera_intrinsic, strict=True
     )
     if t_board_to_cam is None:
+        print("[pickup] Board PnP failed (need 4 board corners visible).")
         return None
 
     # checkpoint1: t_robot_cam = inv(camera_pose) with camera_pose = T_cam_robot
