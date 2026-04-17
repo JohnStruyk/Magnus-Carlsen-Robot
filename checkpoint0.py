@@ -8,7 +8,10 @@ TAG_SIZE = 0.08
 APRILTAG_FAMILY = "tag36h11"
 PREVIEW_MAX_WIDTH = 1280
 
-# top-left, top-right, bottom-left, bottom-right
+# Playmat / robot calibration uses AprilTag ids 4–7 (see get_pnp_pairs).
+PLAYMAT_TAG_IDS = (4, 5, 6, 7)
+
+# top-left, top-right, bottom-left, bottom-right — same layout as before; index i pairs with tag id 4+i
 TAG_CENTER_COORDINATES = [[0.38, 0.4],
                          [0.38, -0.4],
                          [0.0, 0.4],
@@ -17,12 +20,9 @@ TAG_CENTER_COORDINATES = [[0.38, 0.4],
 def get_pnp_pairs(tags):
     """
     Extract corresponding 3D world coordinates and 2D image coordinates for 
-    the corners of detected AprilTags.
+    the corners of detected AprilTags on the **playmat** (ids 4–7).
 
-    This function iterates through the detected tags, filters for specific tag IDs 
-    (0 through 3), and computes the 3D world coordinates of their four corners 
-    based on predefined center coordinates and tag size. It maps these to the 
-    corresponding 2D pixel coordinates found in the image.
+    Tag id 4 uses TAG_CENTER_COORDINATES[0], id 5 uses [1], etc.
 
     Parameters
     ----------
@@ -41,9 +41,9 @@ def get_pnp_pairs(tags):
 
     for tag in tags:
         tid = int(tag.tag_id)
-        if tid < 0 or tid > 3:
+        if tid < 4 or tid > 7:
             continue
-        tag_center = TAG_CENTER_COORDINATES[tid]
+        tag_center = TAG_CENTER_COORDINATES[tid - 4]
 
         # Bottom left corner
         wp = numpy.zeros(3)
@@ -154,8 +154,8 @@ def draw_all_tag_overlays(bgr_image, tags):
             2,
             cv2.LINE_AA,
         )
-    n_playmat = sum(1 for t in tags if 0 <= int(t.tag_id) <= 3)
-    summary = f"tags={len(tags)} (ids 0-3 count={n_playmat}) family={APRILTAG_FAMILY}"
+    n_playmat = sum(1 for t in tags if 4 <= int(t.tag_id) <= 7)
+    summary = f"tags={len(tags)} (playmat ids 4-7 count={n_playmat}) family={APRILTAG_FAMILY}"
     cv2.putText(
         bgr_image,
         summary,
@@ -186,13 +186,21 @@ def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
     return cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
 
-def partition_playmat_and_board_tags(tags, board_tag_ids=(4, 5, 6, 7)):
+def partition_playmat_and_board_tags(
+    tags,
+    chessboard_corner_tag_ids=(0, 1, 2, 3),
+    playmat_tag_ids=(4, 5, 6, 7),
+):
     """
-    Split detections into four playmat tags (ids 0–3) and four board tags.
+    Split detections into playmat tags (default ids 4–7, robot calibration) and chessboard
+    corner tags (default ids 0–3, piece_continuity BOARD_CONFIG).
 
-    - If board corners use IDs 4–7, playmat = {0,1,2,3}, board = {4,5,6,7}.
-    - Else if board reuses 0–3, expect two detections per ID (mat + board); assign the
-      larger polygon in image space to the playmat (usually closer / larger on ZED).
+    - Case 1: All four chessboard ids and all four playmat ids appear at least once:
+      one detection per id (largest area wins if duplicated).
+    - Case 2: No playmat ids in the image — duplicate chessboard_corner_tag_ids on mat+board
+      (two prints per id); larger polygon → playmat, smaller → board.
+
+    ``board_tag_ids`` is deprecated; use ``chessboard_corner_tag_ids`` + ``playmat_tag_ids``.
 
     Returns (playmat_tags, board_tags, debug_msg). On failure, tags are None and msg explains.
     """
@@ -201,45 +209,51 @@ def partition_playmat_and_board_tags(tags, board_tag_ids=(4, 5, 6, 7)):
         tid = int(t.tag_id)
         by_id.setdefault(tid, []).append(t)
 
-    board_ids = list(board_tag_ids)
+    cids = tuple(chessboard_corner_tag_ids)
+    pids = tuple(playmat_tag_ids)
 
-    # Case 1: distinct board IDs (e.g. 4–7)
-    if all(bid in by_id and len(by_id[bid]) >= 1 for bid in board_ids):
+    # Case 1: distinct playmat (4–7) and chessboard (0–3)
+    if all(cid in by_id for cid in cids) and all(pid in by_id for pid in pids):
         playmat = []
         board = []
-        for i in range(4):
+        for pid in pids:
+            cands = sorted(by_id[pid], key=_tag_polygon_area_sq_px, reverse=True)
+            playmat.append(cands[0])
+        for cid in cids:
+            cands = sorted(by_id[cid], key=_tag_polygon_area_sq_px, reverse=True)
+            board.append(cands[0])
+        return playmat, board, "split: playmat 4-7, chessboard 0-3"
+
+    # Case 2: duplicate chessboard ids only (same ids on mat + board; no 4–7 playmat tags)
+    if not any(pid in by_id for pid in pids):
+        playmat = []
+        board = []
+        for i in sorted(cids):
             if i not in by_id:
-                return None, None, f"playmat: missing tag id {i}"
+                return None, None, f"missing chessboard tag id {i} (duplicate mode)"
             cands = sorted(by_id[i], key=_tag_polygon_area_sq_px, reverse=True)
             playmat.append(cands[0])
-        for bid in board_ids:
-            cands = sorted(by_id[bid], key=_tag_polygon_area_sq_px, reverse=True)
-            board.append(cands[0])
-        return playmat, board, "split: playmat 0-3, board 4-7"
+            if len(cands) < 2:
+                return (
+                    None,
+                    None,
+                    f"tag id {i}: only one detection; use playmat tags {list(pids)} on the mat "
+                    f"or print duplicate {list(cids)} on board+mat",
+                )
+            board.append(cands[1])
+        return playmat, board, "split: duplicate chessboard ids — larger area → playmat, smaller → board"
 
-    # Case 2: duplicate 0–3 on mat and board
-    playmat = []
-    board = []
-    for i in range(4):
-        if i not in by_id:
-            return None, None, f"missing tag id {i} (need 0-3 on playmat, and board tags or duplicates)"
-        cands = sorted(by_id[i], key=_tag_polygon_area_sq_px, reverse=True)
-        playmat.append(cands[0])
-        if len(cands) < 2:
-            return (
-                None,
-                None,
-                f"tag id {i}: only one detection; use board tags {board_ids} or print duplicate 0-3 on board",
-            )
-        board.append(cands[1])
-
-    return playmat, board, "split: duplicate 0-3 by larger area -> playmat, smaller -> board"
+    return (
+        None,
+        None,
+        f"need all of playmat {list(pids)} and chessboard {list(cids)}, or duplicate-only chessboard ids",
+    )
 
 
 def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     """
     Same as get_transform_camera_robot but uses an existing tag list (no second detect).
-    Pass exactly the four playmat tags (ids 0–3, one each) so board duplicates are excluded.
+    Pass the playmat tags (ids 4–7, one per id) used for robot-frame PnP.
     """
     world_points, image_points = get_pnp_pairs(tags)
     if world_points.shape[0] < 4:
@@ -328,7 +342,7 @@ def main():
             status = "PnP OK — pose axes drawn (playmat frame)"
             color = (0, 255, 0)
         else:
-            status = "PnP FAILED — need enough corners from playmat ids 0-3 only"
+            status = "PnP FAILED — need enough corners from playmat ids 4-7 only"
             color = (0, 0, 255)
 
         cv2.putText(

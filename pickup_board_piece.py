@@ -27,11 +27,13 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-# RRC-style geometry: playmat -> T_cam_robot; board -> T_cam_board (piece_continuity).
-# All tags use the same AprilTag family; playmat vs board is by *tag ID* (different codes):
-#   - Preferred: playmat ids 0–3, board corners ids 4–7 (BOARD_TAG_IDS below).
-#   - Or: board reuses 0–3 → need two physical tags per id; partition keeps larger polygon as playmat.
-BOARD_TAG_IDS = [4, 5, 6, 7]
+# RRC-style geometry: playmat -> T_cam_robot (checkpoint0); chessboard -> T_cam_board (piece_continuity).
+# Same AprilTag family; roles are separated by ID:
+#   - Chessboard corners: ids 0–3 (piece_continuity BOARD_CONFIG).
+#   - Playmat / robot calibration: ids 4–7 (checkpoint0 TAG_CENTER_COORDINATES, tag 4..7 -> index 0..3).
+#   - Or duplicate 0–3 on mat+board with no 4–7 in view (partition fallback).
+CHESSBOARD_CORNER_TAG_IDS = (0, 1, 2, 3)
+PLAYMAT_CALIBRATION_TAG_IDS = (4, 5, 6, 7)
 
 ROBOT_IP_DEFAULT = "192.168.1.159"
 SAFE_Z = 0.22
@@ -130,33 +132,34 @@ def normalize_piece_type(piece_type):
     return mapping[value]
 
 
-def _board_config_for_pnp():
+def _board_config_corner_tags_remap_4_7():
     """
-    Same board geometry as piece_continuity BOARD_CONFIG, but tag IDs 4–7 so they never
-    collide with playmat tags 0–3 in the same image (required for correct PnP).
+    Same geometry as BOARD_CONFIG but AprilTag ids 4–7 on the chessboard (optional layout).
     """
     c = BOARD_CONFIG["tag_centers"]
+    pids = list(PLAYMAT_CALIBRATION_TAG_IDS)
     return {
         **BOARD_CONFIG,
-        "tag_ids": BOARD_TAG_IDS,
+        "tag_ids": pids,
         "tag_centers": {
-            BOARD_TAG_IDS[0]: c[0],
-            BOARD_TAG_IDS[1]: c[1],
-            BOARD_TAG_IDS[2]: c[2],
-            BOARD_TAG_IDS[3]: c[3],
+            pids[0]: c[0],
+            pids[1]: c[1],
+            pids[2]: c[2],
+            pids[3]: c[3],
         },
     }
 
 
-def _board_pnp_config_for_detections(board_tags):
-    """Use piece_continuity BOARD_CONFIG when board tags are 0–3; else remapped 4–7 layout."""
-    ids = {int(t.tag_id) for t in board_tags}
-    if ids == set(range(4)):
+def _board_pnp_config_for_detections(chessboard_tags):
+    """piece_continuity BOARD_CONFIG for corner ids 0–3; remapped if corners use 4–7."""
+    ids = {int(t.tag_id) for t in chessboard_tags}
+    if ids == set(CHESSBOARD_CORNER_TAG_IDS):
         return BOARD_CONFIG
-    if ids == set(BOARD_TAG_IDS):
-        return _board_config_for_pnp()
+    if ids == set(PLAYMAT_CALIBRATION_TAG_IDS):
+        return _board_config_corner_tags_remap_4_7()
     raise ValueError(
-        f"Board tags must be ids 0-3 or {BOARD_TAG_IDS}; got {sorted(ids)}"
+        f"Chessboard tags must be ids {list(CHESSBOARD_CORNER_TAG_IDS)} or "
+        f"{list(PLAYMAT_CALIBRATION_TAG_IDS)}; got {sorted(ids)}"
     )
 
 
@@ -179,7 +182,9 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
     """
     _, tags = detect_apriltags_gray(img, families=APRILTAG_FAMILY)
     playmat_tags, board_tags, split_msg = partition_playmat_and_board_tags(
-        tags, board_tag_ids=tuple(BOARD_TAG_IDS)
+        tags,
+        chessboard_corner_tag_ids=CHESSBOARD_CORNER_TAG_IDS,
+        playmat_tag_ids=PLAYMAT_CALIBRATION_TAG_IDS,
     )
     if playmat_tags is None or board_tags is None:
         print(f"[pickup] Tag split failed: {split_msg}")
@@ -200,7 +205,7 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         print(f"[pickup] {e}")
         return None
 
-    # Pass only board tags so duplicate 0–3 on mat+board are not merged in PnP.
+    # Chessboard corner tags only (not playmat 4–7).
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
         board_tags, board_cfg, camera_intrinsic, strict=True
     )
@@ -282,7 +287,7 @@ def show_preview(
             if tcr is not None:
                 draw_pose_axes(tag_vis, camera_intrinsic, tcr, size=TAG_SIZE)
             status = vision_meta.get("split_msg", "")
-            line = f"pickup: {status} | board PnP OK"
+            line = f"pickup: {status} | chessboard PnP OK"
             for dy, color, th in ((2, (255, 255, 255), 2), (0, (0, 200, 0), 1)):
                 cv2.putText(
                     tag_vis,
@@ -323,8 +328,8 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         vision = build_vision_from_piece_continuity(img, camera_intrinsic)
         if vision is None:
             raise RuntimeError(
-                "Vision failed: need playmat tags 0–3 (checkpoint0) and board tags "
-                f"{BOARD_TAG_IDS} with geometry from piece_continuity BOARD_CONFIG."
+                "Vision failed: need playmat tags 4–7 (checkpoint0) and chessboard tags "
+                f"{list(CHESSBOARD_CORNER_TAG_IDS)} (piece_continuity), or duplicate chessboard ids."
             )
 
         warped = vision["warped"]
