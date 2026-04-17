@@ -52,6 +52,42 @@ GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
 
+# Preview: BGR — pick (FROM) = yellow, place (TO) = blue (matches user request).
+COLOR_FROM_BGR = (0, 255, 255)
+COLOR_TO_BGR = (255, 0, 0)
+
+
+def _square_quad_warped(row, col, square_px):
+    """Corners of one cell in warped pixel coords: TL, TR, BR, BL (x, y)."""
+    s = float(square_px)
+    return np.array(
+        [
+            [
+                [col * s, row * s],
+                [(col + 1) * s, row * s],
+                [(col + 1) * s, (row + 1) * s],
+                [col * s, (row + 1) * s],
+            ]
+        ],
+        dtype=np.float32,
+    )
+
+
+def _quad_warped_to_raw(H_warp_to_img, row, col, square_px):
+    """Map a warped-board cell to a quadrilateral in the original camera image."""
+    qw = _square_quad_warped(row, col, square_px)
+    return cv2.perspectiveTransform(qw, H_warp_to_img)
+
+
+def _blend_quad_on_image(bgr, quad_xy, color_bgr, alpha=0.38, edge_thickness=3):
+    """Semi-transparent fill + solid outline on ``bgr`` (modified in place)."""
+    pts = np.round(quad_xy.reshape(4, 2)).astype(np.int32)
+    layer = bgr.copy()
+    cv2.fillPoly(layer, [pts], color_bgr)
+    cv2.addWeighted(layer, alpha, bgr, 1.0 - alpha, 0.0, bgr)
+    cv2.polylines(bgr, [pts], True, color_bgr, edge_thickness, cv2.LINE_AA)
+
+
 def move_to_pose(arm: XArmAPI, t_robot_target: np.ndarray, z_offset_m: float, descend_speed: int):
     xyz = t_robot_target[:3, 3]
     x_mm, y_mm, z_mm = (xyz * 1000.0).tolist()
@@ -142,10 +178,11 @@ def _board_config_for_pickup():
 
 
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
-    """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
-    # piece_continuity.get_board_centers_local: outer r = file (a=0..h=7), inner c = rank-1 (0..7).
-    # Algebraic row is from the top (rank 8 -> row 0), so rank-1 == 7 - row.
-    idx = col * 8 + (7 - row)
+    """
+    Same linear order as get_board_centers_local (nested ``for r: for c:`` → ``r*8+c``) and
+    detect_pieces / warped image: ``row`` = image row (rank 8 at top), ``col`` = file a..h.
+    """
+    idx = row * 8 + col
     p_robot = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
     pose = np.eye(4, dtype=np.float32)
     pose[:3, :3] = t_robot_board[:3, :3].astype(np.float32)
@@ -199,8 +236,13 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         p_robot = t_robot_cam @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
-    warped, _ = get_warped(img, b_rvec, b_tvec, camera_intrinsic, square_px=100)
-    board_state = detect_pieces(warped, square_px=100)
+    square_px = 100
+    warped, _img_corners, H_img_to_warp = get_warped(
+        img, b_rvec, b_tvec, camera_intrinsic, square_px=square_px
+    )
+    # findHomography(img_pts, warp_pts): p_warp ~ H @ p_img → p_img = H^{-1} @ p_warp
+    H_warp_to_img = np.linalg.inv(H_img_to_warp)
+    board_state = detect_pieces(warped, square_px=square_px)
     return {
         "warped": warped,
         "board_state": board_state,
@@ -211,6 +253,8 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         "tags": list(playmat_raw) + list(chess_raw),
         "t_cam_robot": t_cam_robot,
         "split_msg": split_msg,
+        "H_warp_to_img": H_warp_to_img,
+        "square_px": square_px,
     }
 
 
@@ -223,10 +267,13 @@ def show_preview(
     to_row,
     to_col,
     vision_meta=None,
+    from_square=None,
+    to_square=None,
 ):
     """
-    Display checkpoint0-style AprilTag overlay (all tags + playmat pose axes) and warped board
-    with source/destination overlays. Same key as checkpoint0: press 'k' to confirm execute.
+    Warped board: yellow = FROM (pick), blue = TO (place).
+    Raw camera: same cells projected with the board homography (inverse of warp) so you see
+    exactly which physical quadrilaterals match the arm targets. Press 'k' to execute.
     """
     preview_img = warped.copy()
     square_px = warped.shape[0] // 8
@@ -240,10 +287,12 @@ def show_preview(
 
     fx0, fy0, fx1, fy1 = square_rect(from_row, from_col)
     tx0, ty0, tx1, ty1 = square_rect(to_row, to_col)
-    cv2.rectangle(preview_img, (fx0, fy0), (fx1, fy1), (0, 255, 255), 3)
-    cv2.rectangle(preview_img, (tx0, ty0), (tx1, ty1), (255, 0, 0), 3)
-    cv2.putText(preview_img, "FROM", (fx0 + 4, fy0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-    cv2.putText(preview_img, "TO", (tx0 + 4, ty0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+    cv2.rectangle(preview_img, (fx0, fy0), (fx1, fy1), COLOR_FROM_BGR, 3)
+    cv2.rectangle(preview_img, (tx0, ty0), (tx1, ty1), COLOR_TO_BGR, 3)
+    flab = f"FROM {from_square}" if from_square else "FROM"
+    tlab = f"TO {to_square}" if to_square else "TO"
+    cv2.putText(preview_img, flab, (fx0 + 4, fy0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_FROM_BGR, 2)
+    cv2.putText(preview_img, tlab, (tx0 + 4, ty0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_TO_BGR, 2)
 
     # Downscale large warped views so preview is usable on screen.
     max_preview_dim = 900
@@ -268,8 +317,40 @@ def show_preview(
             tcr = vision_meta.get("t_cam_robot")
             if tcr is not None:
                 draw_pose_axes(tag_vis, camera_intrinsic, tcr, size=TAG_SIZE)
+            H_warp_to_img = vision_meta.get("H_warp_to_img")
+            spx = vision_meta.get("square_px", square_px)
+            if H_warp_to_img is not None:
+                # Destination (blue) under pick (yellow) so both stay visible.
+                q_to = _quad_warped_to_raw(H_warp_to_img, to_row, to_col, spx)
+                q_from = _quad_warped_to_raw(H_warp_to_img, from_row, from_col, spx)
+                _blend_quad_on_image(tag_vis, q_to, COLOR_TO_BGR, alpha=0.32)
+                _blend_quad_on_image(tag_vis, q_from, COLOR_FROM_BGR, alpha=0.36)
+                c_from = q_from.reshape(4, 2).mean(axis=0)
+                c_to = q_to.reshape(4, 2).mean(axis=0)
+                cf = (int(c_from[0]), int(c_from[1]))
+                ct = (int(c_to[0]), int(c_to[1]))
+                cv2.putText(
+                    tag_vis,
+                    flab,
+                    (max(4, cf[0] - 40), max(22, cf[1])),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    COLOR_FROM_BGR,
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    tag_vis,
+                    tlab,
+                    (max(4, ct[0] - 40), max(22, ct[1])),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    COLOR_TO_BGR,
+                    2,
+                    cv2.LINE_AA,
+                )
             status = vision_meta.get("split_msg", "")
-            line = f"pickup: {status} | chessboard PnP OK"
+            line = f"pickup: {status} | yellow=FROM blue=TO (raw = arm targets)"
             for dy, color, th in ((2, (255, 255, 255), 2), (0, (0, 200, 0), 1)):
                 cv2.putText(
                     tag_vis,
@@ -281,8 +362,8 @@ def show_preview(
                     th,
                     cv2.LINE_AA,
                 )
-            cv2.namedWindow("pickup: AprilTag preview", cv2.WINDOW_NORMAL)
-            cv2.imshow("pickup: AprilTag preview", resize_for_preview(tag_vis))
+            cv2.namedWindow("pickup: raw camera (FROM yellow / TO blue)", cv2.WINDOW_NORMAL)
+            cv2.imshow("pickup: raw camera (FROM yellow / TO blue)", resize_for_preview(tag_vis))
 
     cv2.namedWindow("Warped board", cv2.WINDOW_NORMAL)
     cv2.imshow("Warped board", preview_img)
@@ -335,7 +416,11 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
                     "chessboard_tags": vision["chessboard_tags"],
                     "t_cam_robot": vision["t_cam_robot"],
                     "split_msg": vision["split_msg"],
+                    "H_warp_to_img": vision["H_warp_to_img"],
+                    "square_px": vision["square_px"],
                 },
+                from_square=from_square,
+                to_square=to_square,
             )
 
         from_detected = int(board_state[from_row, from_col])
@@ -350,6 +435,10 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         to_pose = square_to_robot_pose(robot_frame_centers, to_row, to_col, t_rb)
 
         print(f"Moving {piece_name} from {from_square} to {to_square}")
+        print(
+            f"[pickup] Grid index row*8+col: FROM=({from_row},{from_col})→{from_row * 8 + from_col}, "
+            f"TO=({to_row},{to_col})→{to_row * 8 + to_col} (must match warped yellow/blue cells)"
+        )
         print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
         print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
 

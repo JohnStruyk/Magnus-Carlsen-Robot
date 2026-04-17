@@ -86,7 +86,7 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     return t_mat, rvec, tvec 
 
 def get_board_centers_local(config):
-    """Square centers in board frame. Index i = r*8+c: r = file a=0..h=7, c = rank-1 (rank 1 -> c=0)."""
+    """Square centers in board frame. Index ``i = r*8+c`` for nested ``for r: for c:`` (same order as warped ``row,col``)."""
     grid_pts = []
     off_x, off_y = config["grid_origin_offset"]
     s = config["square_size"]
@@ -146,7 +146,8 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
-    return warped, img_corners
+    # img_corners -> warped: p_w ~ H @ p_img, so p_img = H^{-1} @ p_w for drawing on raw image.
+    return warped, img_corners, H_mat
 
 def detect_pieces(warped, square_px):
     board_state = np.zeros((8,8),dtype=int)
@@ -286,7 +287,7 @@ def get_board_state(cv_image, detector, camera_intrinsic):
 
     output_square_px = 100
 
-    warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
+    warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
     
     #Comment this out to remove piece detection
     board_state = detect_pieces(warped, output_square_px)
