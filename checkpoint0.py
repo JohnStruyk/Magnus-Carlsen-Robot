@@ -5,6 +5,8 @@ from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
 
 TAG_SIZE = 0.08
+APRILTAG_FAMILY = "tag36h11"
+PREVIEW_MAX_WIDTH = 1280
 
 # top-left, top-right, bottom-left, bottom-right
 TAG_CENTER_COORDINATES = [[0.38, 0.4],
@@ -38,11 +40,10 @@ def get_pnp_pairs(tags):
     image_points = numpy.empty([0, 2])
 
     for tag in tags:
-        
-        if tag.tag_id > 3:
+        tid = int(tag.tag_id)
+        if tid < 0 or tid > 3:
             continue
-        
-        tag_center = TAG_CENTER_COORDINATES[tag.tag_id]
+        tag_center = TAG_CENTER_COORDINATES[tid]
 
         # Bottom left corner
         wp = numpy.zeros(3)
@@ -88,11 +89,101 @@ def get_pnp_pairs(tags):
 
 
 def _tag_polygon_area_sq_px(tag):
-    """Signed area * 2 of quadrilateral; use abs for sort comparisons."""
-    c = tag.corners.astype(numpy.float64)
+    """Quadrilateral area in pixels (opencv expects Nx1x2)."""
+    c = numpy.asarray(tag.corners, dtype=numpy.float32)
     if c.shape[0] < 4:
         return 0.0
+    c = c.reshape(-1, 1, 2)
     return float(abs(cv2.contourArea(c)))
+
+
+def to_bgr_display(image):
+    """BGR image for cv2.imshow (handles BGRA / BGR / gray from ZED)."""
+    if image is None:
+        return None
+    if len(image.shape) == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    return image.copy()
+
+
+def detect_apriltags_gray(image, families=None):
+    """Return (gray_uint8, tags). Safe grayscale conversion."""
+    if image is None:
+        return None, []
+    fam = families or APRILTAG_FAMILY
+    if len(image.shape) == 2:
+        gray = image
+    elif image.shape[2] == 4:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    detector = Detector(families=fam)
+    tags = detector.detect(gray, estimate_tag_pose=False)
+    return gray, tags
+
+
+def draw_all_tag_overlays(bgr_image, tags):
+    """
+    Draw every detected tag: outline, center, ID (and hamming if present).
+    Mutates bgr_image in place.
+    """
+    for tag in tags:
+        tid = int(tag.tag_id)
+        corners = numpy.asarray(tag.corners, dtype=numpy.int32)
+        if corners.shape[0] >= 4:
+            for i in range(4):
+                p0 = tuple(corners[i])
+                p1 = tuple(corners[(i + 1) % 4])
+                cv2.line(bgr_image, p0, p1, (0, 255, 0), 2)
+        cx, cy = int(tag.center[0]), int(tag.center[1])
+        label = f"id:{tid}"
+        if getattr(tag, "hamming", None) is not None:
+            label += f" h:{tag.hamming}"
+        if getattr(tag, "decision_margin", None) is not None:
+            label += f" dm:{float(tag.decision_margin):.0f}"
+        cv2.circle(bgr_image, (cx, cy), 6, (0, 0, 255), -1)
+        cv2.putText(
+            bgr_image,
+            label,
+            (cx + 8, cy),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    n_playmat = sum(1 for t in tags if 0 <= int(t.tag_id) <= 3)
+    summary = f"tags={len(tags)} (ids 0-3 count={n_playmat}) family={APRILTAG_FAMILY}"
+    cv2.putText(
+        bgr_image,
+        summary,
+        (12, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        bgr_image,
+        summary,
+        (10, 26),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 0, 0),
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
+    h, w = bgr.shape[:2]
+    if w <= max_w:
+        return bgr
+    scale = max_w / float(w)
+    return cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
 
 def partition_playmat_and_board_tags(tags, board_tag_ids=(4, 5, 6, 7)):
@@ -167,7 +258,7 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     return transform_mat
 
 
-def get_transform_camera_robot(observation, camera_intrinsic):
+def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
     """
     Calculate the 4x4 transformation matrix from the camera frame to the 
     robot base frame using AprilTag detections.
@@ -182,6 +273,8 @@ def get_transform_camera_robot(observation, camera_intrinsic):
         The input image from the camera. Can be a color (BGRA/BGR) or grayscale image.
     camera_intrinsic : numpy.ndarray
         The 3x3 intrinsic camera matrix.
+    tags : list or None
+        Optional precomputed detections from ``detect_apriltags_gray`` to avoid a second pass.
 
     Returns
     -------
@@ -190,14 +283,12 @@ def get_transform_camera_robot(observation, camera_intrinsic):
         or None if insufficient valid tags are found or the PnP calculation fails.
     """
 
-    # Initialize AprilTag Detector
-    detector = Detector(families='tag36h11')
-
-    # Detect AprilTag Points
-    if len(observation.shape) > 2:
-        observation = cv2.cvtColor(observation, cv2.COLOR_BGRA2GRAY)
-    tags = detector.detect(observation, estimate_tag_pose=False)
-    print(f'Number of tags found: {len(tags)}')
+    if tags is None:
+        _, tags = detect_apriltags_gray(observation, families=APRILTAG_FAMILY)
+    print(f"Number of tags found: {len(tags)}")
+    if tags:
+        ids = sorted(set(int(t.tag_id) for t in tags))
+        print(f"Detected tag ids: {ids}")
     world_points, image_points = get_pnp_pairs(tags)
     if world_points.shape[0] < 4:
         print(f'Insufficient valid tag corners found.')
@@ -216,30 +307,52 @@ def get_transform_camera_robot(observation, camera_intrinsic):
     return transform_mat
 
 def main():
-
-    # Initialize ZED Camera
     zed = ZedCamera()
     camera_intrinsic = zed.camera_intrinsic
 
     try:
-        # Get Observation
         cv_image = zed.image
-
-        # Get Transformation
-        t_cam_robot = get_transform_camera_robot(cv_image, camera_intrinsic)
-        if t_cam_robot is None:
+        if cv_image is None:
+            print("No image from camera.")
             return
-        
-        # Visualization
-        draw_pose_axes(cv_image, camera_intrinsic, t_cam_robot, size=TAG_SIZE)
-        cv2.namedWindow('Verifying World Origin', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Verifying World Origin', 1280, 720)
-        cv2.imshow('Verifying World Origin', cv_image)
+
+        _, tags = detect_apriltags_gray(cv_image, families=APRILTAG_FAMILY)
+        vis = to_bgr_display(cv_image)
+        draw_all_tag_overlays(vis, tags)
+
+        t_cam_robot = get_transform_camera_robot(
+            cv_image, camera_intrinsic, tags=tags
+        )
+        if t_cam_robot is not None:
+            draw_pose_axes(vis, camera_intrinsic, t_cam_robot, size=TAG_SIZE)
+            status = "PnP OK — pose axes drawn (playmat frame)"
+            color = (0, 255, 0)
+        else:
+            status = "PnP FAILED — need enough corners from playmat ids 0-3 only"
+            color = (0, 0, 255)
+
+        cv2.putText(
+            vis,
+            status,
+            (12, 56),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+        print(f"[checkpoint0] Preview: {len(tags)} tag(s). {status}")
+        print("[checkpoint0] Press any key to close.")
+
+        cv2.namedWindow("checkpoint0: AprilTag preview", cv2.WINDOW_NORMAL)
+        cv2.imshow("checkpoint0: AprilTag preview", resize_for_preview(vis))
         cv2.waitKey(0)
-    
+        cv2.destroyAllWindows()
+
     finally:
-        # Close ZED Camera
         zed.close()
+
 
 if __name__ == "__main__":
     main()
