@@ -22,7 +22,14 @@ TAG_CENTER_COORDINATES = [[0.38, 0.4],
                          [0.0, -0.4]]
 
 def get_pnp_pairs(tags):
-    """3D–2D pairs for playmat tags (PLAYMAT_TAG_FAMILY), ids 0–3."""
+    """3D–2D pairs for playmat tags (PLAYMAT_TAG_FAMILY), ids 0–3.
+
+    World corner order **must match** ``piece_continuity.get_4x4_transform`` (same
+    ``tag.corners[k]`` → board/playmat XY mapping). The old order swapped Y for
+    corners 0–3 vs that function, which made camera↔robot PnP inconsistent with
+    chessboard PnP: overlays looked correct but ``t_robot_cam @ t_board_to_cam``
+    sent the arm to the wrong XY.
+    """
     half = TAG_SIZE / 2.0
     world_points = numpy.empty([0, 3])
     image_points = numpy.empty([0, 2])
@@ -31,47 +38,19 @@ def get_pnp_pairs(tags):
         tid = int(tag.tag_id)
         if tid < 0 or tid > 3:
             continue
-        tag_center = TAG_CENTER_COORDINATES[tid]
-
-        # Bottom left corner
-        wp = numpy.zeros(3)
-        wp[0] = tag_center[0] - half
-        wp[1] = tag_center[1] + half
-
-        ip = tag.corners[0]
-
-        world_points = numpy.vstack([world_points, wp])
-        image_points = numpy.vstack([image_points, ip])
-
-        # Bottom right corner
-        wp = numpy.zeros(3)
-        wp[0] = tag_center[0] - half
-        wp[1] = tag_center[1] - half
-
-        ip = tag.corners[1]
-
-        world_points = numpy.vstack([world_points, wp])
-        image_points = numpy.vstack([image_points, ip])
-
-        # Top right corner
-        wp = numpy.zeros(3)
-        wp[0] = tag_center[0] + half
-        wp[1] = tag_center[1] - half
-
-        ip = tag.corners[2]
-
-        world_points = numpy.vstack([world_points, wp])
-        image_points = numpy.vstack([image_points, ip])
-
-        # Top left corner
-        wp = numpy.zeros(3)
-        wp[0] = tag_center[0] + half
-        wp[1] = tag_center[1] + half
-
-        ip = tag.corners[3]
-
-        world_points = numpy.vstack([world_points, wp])
-        image_points = numpy.vstack([image_points, ip])
+        cx, cy = TAG_CENTER_COORDINATES[tid]
+        # Identical to piece_continuity.get_4x4_transform wp_corners (indices 0..3).
+        wp_corners = [
+            [cx - half, cy - half],
+            [cx - half, cy + half],
+            [cx + half, cy + half],
+            [cx + half, cy - half],
+        ]
+        for k in range(4):
+            wp = numpy.array([wp_corners[k][0], wp_corners[k][1], 0.0], dtype=numpy.float64)
+            ip = numpy.asarray(tag.corners[k], dtype=numpy.float64)
+            world_points = numpy.vstack([world_points, wp])
+            image_points = numpy.vstack([image_points, ip])
 
     return world_points, image_points
 
