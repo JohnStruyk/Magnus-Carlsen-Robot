@@ -28,16 +28,6 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-# --- How square positions reach the arm ---
-# 1) Playmat PnP (checkpoint0): camera <- playmat frame using TAG_CENTER_COORDINATES + playmat tag edge.
-# 2) Board PnP (piece_continuity): camera <- board frame using BOARD_CONFIG tag_centers + chess tag edge.
-# 3) Chain: p_robot = inv(T_cam_playmat) @ T_board_to_cam @ p_square  (playmat frame == robot frame here).
-# 4) Gripper pose uses that XYZ + board orientation; TCP length is set on the arm.
-# If vision looks right but the arm is shifted or Z is wrong: wrong *physical tag sizes* in PnP, or
-# BOARD_CONFIG grid_origin_offset / square_size not matching the real board, or residual hand–eye error.
-
-# Measured outer edge of printed tags (meters). Wrong values break PnP depth and XY scale.
-PLAYMAT_TAG_EDGE_M = 0.08
 BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
 # Optional: set to ruler-measured square size if it differs from piece_continuity BOARD_CONFIG.
 CHESS_SQUARE_SIZE_M = None
@@ -153,7 +143,9 @@ def _board_config_for_pickup():
 
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
     """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
-    idx = row * 8 + col
+    # piece_continuity.get_board_centers_local: outer r = file (a=0..h=7), inner c = rank-1 (0..7).
+    # Algebraic row is from the top (rank 8 -> row 0), so rank-1 == 7 - row.
+    idx = col * 8 + (7 - row)
     p_robot = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
     pose = np.eye(4, dtype=np.float32)
     pose[:3, :3] = t_robot_board[:3, :3].astype(np.float32)
@@ -185,14 +177,8 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         return None
     print(f"[pickup] {split_msg}")
     board_cfg = _board_config_for_pickup()
-    print(
-        f"[pickup] Calibration: playmat edge={PLAYMAT_TAG_EDGE_M} m, board edge={board_cfg['tag_size']} m, "
-        f"square={board_cfg['square_size']} m, hand-eye bias (m)={HAND_EYE_XYZ_BIAS_M.tolist()}"
-    )
 
-    t_cam_robot = get_transform_camera_robot_from_tags(
-        playmat_tags, camera_intrinsic, tag_edge_m=PLAYMAT_TAG_EDGE_M
-    )
+    t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
     if t_cam_robot is None:
         return None
 

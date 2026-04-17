@@ -21,14 +21,9 @@ TAG_CENTER_COORDINATES = [[0.38, 0.4],
                          [0.0, 0.4],
                          [0.0, -0.4]]
 
-def get_pnp_pairs(tags, tag_edge_m=None):
-    """
-    3D–2D pairs for **playmat** tags only (PLAYMAT_TAG_FAMILY), ids 0–3.
-
-    ``tag_edge_m``: physical tag edge in meters (defaults to ``TAG_SIZE``).
-    """
-    edge = float(tag_edge_m) if tag_edge_m is not None else float(TAG_SIZE)
-    half = edge / 2.0
+def get_pnp_pairs(tags):
+    """3D–2D pairs for playmat tags (PLAYMAT_TAG_FAMILY), ids 0–3."""
+    half = TAG_SIZE / 2.0
     world_points = numpy.empty([0, 3])
     image_points = numpy.empty([0, 2])
 
@@ -249,78 +244,9 @@ def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
     return cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
 
-def partition_playmat_and_board_tags(
-    tags,
-    chessboard_corner_tag_ids=(0, 1, 2, 3),
-    playmat_tag_ids=(4, 5, 6, 7),
-):
-    """
-    Split detections into playmat tags (default ids 4–7, robot calibration) and chessboard
-    corner tags (default ids 0–3, piece_continuity BOARD_CONFIG).
-
-    - Case 1: All four chessboard ids and all four playmat ids appear at least once:
-      one detection per id (largest area wins if duplicated).
-    - Case 2: No playmat ids in the image — duplicate chessboard_corner_tag_ids on mat+board
-      (two prints per id); larger polygon → playmat, smaller → board.
-
-    ``board_tag_ids`` is deprecated; use ``chessboard_corner_tag_ids`` + ``playmat_tag_ids``.
-
-    Returns (playmat_tags, board_tags, debug_msg). On failure, tags are None and msg explains.
-    """
-    by_id = {}
-    for t in tags:
-        tid = int(t.tag_id)
-        by_id.setdefault(tid, []).append(t)
-
-    cids = tuple(chessboard_corner_tag_ids)
-    pids = tuple(playmat_tag_ids)
-
-    # Case 1: distinct playmat (4–7) and chessboard (0–3)
-    if all(cid in by_id for cid in cids) and all(pid in by_id for pid in pids):
-        playmat = []
-        board = []
-        for pid in pids:
-            cands = sorted(by_id[pid], key=_tag_polygon_area_sq_px, reverse=True)
-            playmat.append(cands[0])
-        for cid in cids:
-            cands = sorted(by_id[cid], key=_tag_polygon_area_sq_px, reverse=True)
-            board.append(cands[0])
-        return playmat, board, "split: playmat 4-7, chessboard 0-3"
-
-    # Case 2: duplicate chessboard ids only (same ids on mat + board; no 4–7 playmat tags)
-    if not any(pid in by_id for pid in pids):
-        playmat = []
-        board = []
-        for i in sorted(cids):
-            if i not in by_id:
-                return None, None, f"missing chessboard tag id {i} (duplicate mode)"
-            cands = sorted(by_id[i], key=_tag_polygon_area_sq_px, reverse=True)
-            playmat.append(cands[0])
-            if len(cands) < 2:
-                return (
-                    None,
-                    None,
-                    f"tag id {i}: only one detection; use playmat tags {list(pids)} on the mat "
-                    f"or print duplicate {list(cids)} on board+mat",
-                )
-            board.append(cands[1])
-        return playmat, board, "split: duplicate chessboard ids — larger area → playmat, smaller → board"
-
-    return (
-        None,
-        None,
-        f"need all of playmat {list(pids)} and chessboard {list(cids)}, or duplicate-only chessboard ids",
-    )
-
-
-def get_transform_camera_robot_from_tags(tags, camera_intrinsic, tag_edge_m=None):
-    """
-    Same as get_transform_camera_robot but uses an existing tag list (no second detect).
-    Pass playmat-family tags with ids 0–3 (one per corner after best_tag_per_id_0_3).
-
-    ``tag_edge_m``: physical playmat AprilTag edge length (meters); must match prints.
-    """
-    world_points, image_points = get_pnp_pairs(tags, tag_edge_m=tag_edge_m)
+def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
+    """PnP from playmat tags (ids 0–3); pass one tag per id from best_tag_per_id_0_3."""
+    world_points, image_points = get_pnp_pairs(tags)
     if world_points.shape[0] < 4:
         print("Insufficient playmat tag corners after filtering (need family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY)
         return None
@@ -337,30 +263,8 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic, tag_edge_m=None
     return transform_mat
 
 
-def get_transform_camera_robot(observation, camera_intrinsic, tags=None, tag_edge_m=None):
-    """
-    Calculate the 4x4 transformation matrix from the camera frame to the 
-    robot base frame using AprilTag detections.
-
-    The function detects AprilTags in the provided image, retrieves 
-    the 3D-2D point correspondences, and uses the Perspective-n-Point (PnP) algorithm 
-    to estimate the pose of the camera.
-
-    Parameters
-    ----------
-    observation : numpy.ndarray
-        The input image from the camera. Can be a color (BGRA/BGR) or grayscale image.
-    camera_intrinsic : numpy.ndarray
-        The 3x3 intrinsic camera matrix.
-    tags : list or None
-        Optional precomputed detections from ``detect_apriltags_gray`` to avoid a second pass.
-
-    Returns
-    -------
-    transform_mat : numpy.ndarray or None
-        A 4x4 transformation matrix representing the rotation and translation,
-        or None if insufficient valid tags are found or the PnP calculation fails.
-    """
+def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
+    """Camera <- robot (playmat) from AprilTag PnP. Optional ``tags`` skips re-detection."""
 
     if tags is None:
         _, playmat_raw, _ = detect_playmat_and_chessboard_tags(observation)
@@ -375,7 +279,7 @@ def get_transform_camera_robot(observation, camera_intrinsic, tags=None, tag_edg
     if tags:
         ids = sorted(set(int(t.tag_id) for t in tags))
         print(f"Playmat tag ids: {ids}")
-    world_points, image_points = get_pnp_pairs(tags, tag_edge_m=tag_edge_m)
+    world_points, image_points = get_pnp_pairs(tags)
     if world_points.shape[0] < 4:
         print(f'Insufficient valid tag corners found.')
         return None

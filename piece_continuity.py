@@ -86,14 +86,13 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     return t_mat, rvec, tvec 
 
 def get_board_centers_local(config):
-    """Generates 3D coordinates for the grid [X, Y, Z, 1]."""
+    """Square centers in board frame. Index i = r*8+c: r = file a=0..h=7, c = rank-1 (rank 1 -> c=0)."""
     grid_pts = []
     off_x, off_y = config["grid_origin_offset"]
     s = config["square_size"]
 
     for r in range(config["grid_size"][0]):
         for c in range(config["grid_size"][1]):
-            # +X is Up (rows), +Y is Right (cols)
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
@@ -137,24 +136,6 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
 
     img_corners = img_corners.reshape(-1, 2)
 
-    '''FINDING TAGS USING APRIL TAG NOT BOARD CONFIG
-    tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
-
-    # Ensure all 4 tags exist
-    if not all(tid in tag_dict for tid in BOARD_CONFIG["tag_ids"]):
-        print("Not all board tags detected.")
-        return
-
-    # Order: BL, TL, TR, BR (must match dst_corners!)
-    img_corners = np.array([
-        tag_dict[0].center,  # bottom-left
-        tag_dict[1].center,  # top-left
-        tag_dict[3].center,  # top-right
-        tag_dict[2].center,  # bottom-right
-    ], dtype=np.float32)
-    '''
-    
-
     dst_corners = np.array([
         [0, H],
         [0, 0],
@@ -165,8 +146,6 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
-
-    #img corners are in 2d image space i think
     return warped, img_corners
 
 def detect_pieces(warped, square_px):
