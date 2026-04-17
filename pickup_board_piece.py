@@ -50,13 +50,13 @@ HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
 # Robot motion (Lite6 + parallel gripper)
 # ---------------------------------------------------------------------------
 ROBOT_IP_DEFAULT = "192.168.1.159"
-SAFE_Z = 0.22
+SAFE_Z = 0.17
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
-MIN_TOOL_Z_M = 0.05
+MIN_TOOL_Z_M = 0.06
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
