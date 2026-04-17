@@ -64,6 +64,16 @@ GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
 
+# Chesspiece Calibration
+PIECE_CONFIG = {
+    "king_height": 0.0950214,
+    "queen_height": 0.075184,
+    "bishop_height": 0.0638048,
+    "knight_height": 0.0569976,
+    "rook_height": 0.0455422,
+    "pawn_height":  0.0445008
+}
+
 # Preview: FROM = yellow, TO = blue (BGR)
 _COLOR_FROM_BGR = (0, 255, 255)
 _COLOR_TO_BGR = (255, 0, 0)
