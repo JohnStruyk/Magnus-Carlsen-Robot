@@ -7,12 +7,13 @@ from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
 from checkpoint0 import (
-    APRILTAG_FAMILY,
+    CHESSBOARD_TAG_FAMILY,
+    PLAYMAT_TAG_FAMILY,
     TAG_SIZE,
-    detect_apriltags_gray,
-    draw_all_tag_overlays,
+    best_tag_per_id_0_3,
+    detect_playmat_and_chessboard_tags,
+    draw_dual_family_tag_overlays,
     get_transform_camera_robot_from_tags,
-    partition_playmat_and_board_tags,
     resize_for_preview,
     to_bgr_display,
 )
@@ -27,13 +28,7 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-# RRC-style geometry: playmat -> T_cam_robot (checkpoint0); chessboard -> T_cam_board (piece_continuity).
-# Same AprilTag family; roles are separated by ID:
-#   - Chessboard corners: ids 0–3 (piece_continuity BOARD_CONFIG).
-#   - Playmat / robot calibration: ids 4–7 (checkpoint0 TAG_CENTER_COORDINATES, tag 4..7 -> index 0..3).
-#   - Or duplicate 0–3 on mat+board with no 4–7 in view (partition fallback).
-CHESSBOARD_CORNER_TAG_IDS = (0, 1, 2, 3)
-PLAYMAT_CALIBRATION_TAG_IDS = (4, 5, 6, 7)
+# Playmat vs chessboard use different AprilTag families; both use ids 0–3 (see checkpoint0).
 
 ROBOT_IP_DEFAULT = "192.168.1.159"
 SAFE_Z = 0.22
@@ -132,37 +127,6 @@ def normalize_piece_type(piece_type):
     return mapping[value]
 
 
-def _board_config_corner_tags_remap_4_7():
-    """
-    Same geometry as BOARD_CONFIG but AprilTag ids 4–7 on the chessboard (optional layout).
-    """
-    c = BOARD_CONFIG["tag_centers"]
-    pids = list(PLAYMAT_CALIBRATION_TAG_IDS)
-    return {
-        **BOARD_CONFIG,
-        "tag_ids": pids,
-        "tag_centers": {
-            pids[0]: c[0],
-            pids[1]: c[1],
-            pids[2]: c[2],
-            pids[3]: c[3],
-        },
-    }
-
-
-def _board_pnp_config_for_detections(chessboard_tags):
-    """piece_continuity BOARD_CONFIG for corner ids 0–3; remapped if corners use 4–7."""
-    ids = {int(t.tag_id) for t in chessboard_tags}
-    if ids == set(CHESSBOARD_CORNER_TAG_IDS):
-        return BOARD_CONFIG
-    if ids == set(PLAYMAT_CALIBRATION_TAG_IDS):
-        return _board_config_corner_tags_remap_4_7()
-    raise ValueError(
-        f"Chessboard tags must be ids {list(CHESSBOARD_CORNER_TAG_IDS)} or "
-        f"{list(PLAYMAT_CALIBRATION_TAG_IDS)}; got {sorted(ids)}"
-    )
-
-
 def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
     """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
     idx = row * 8 + col
@@ -176,38 +140,33 @@ def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
 def build_vision_from_piece_continuity(img, camera_intrinsic):
     """
     RRC geometry (see Real-Robot-Challenge/checkpoint1.py):
-      - Playmat / robot frame: checkpoint0.get_transform_camera_robot -> T_cam_robot
-      - Board frame: piece_continuity.get_4x4_transform(BOARD) -> T_cam_board
+      - Playmat / robot frame: checkpoint0 (PLAYMAT_TAG_FAMILY, ids 0–3) -> T_cam_robot
+      - Board frame: piece_continuity.get_4x4_transform(CHESSBOARD_TAG_FAMILY, ids 0–3) -> T_cam_board
       - Point in robot base: p_robot = inv(T_cam_robot) @ T_cam_board @ p_board
     """
-    _, tags = detect_apriltags_gray(img, families=APRILTAG_FAMILY)
-    playmat_tags, board_tags, split_msg = partition_playmat_and_board_tags(
-        tags,
-        chessboard_corner_tag_ids=CHESSBOARD_CORNER_TAG_IDS,
-        playmat_tag_ids=PLAYMAT_CALIBRATION_TAG_IDS,
+    _, playmat_raw, chess_raw = detect_playmat_and_chessboard_tags(img)
+    playmat_tags, pm_ok = best_tag_per_id_0_3(playmat_raw)
+    board_tags, ch_ok = best_tag_per_id_0_3(chess_raw)
+    split_msg = (
+        f"dual-family playmat {PLAYMAT_TAG_FAMILY} n={len(playmat_raw)} (ok 4 corners: {pm_ok}), "
+        f"chess {CHESSBOARD_TAG_FAMILY} n={len(chess_raw)} (ok 4 corners: {ch_ok})"
     )
-    if playmat_tags is None or board_tags is None:
-        print(f"[pickup] Tag split failed: {split_msg}")
-        print(
-            f"[pickup] {APRILTAG_FAMILY} detected ids: "
-            f"{sorted(set(int(t.tag_id) for t in tags))} (n={len(tags)})"
-        )
+    if not pm_ok:
+        print(f"[pickup] Need four playmat tags ids 0-3 in {PLAYMAT_TAG_FAMILY}. {split_msg}")
+        print(f"[pickup] Raw playmat ids: {sorted(set(int(t.tag_id) for t in playmat_raw))}")
         return None
-    print(f"[pickup] Tag split OK: {split_msg}")
+    if not ch_ok:
+        print(f"[pickup] Need four chessboard tags ids 0-3 in {CHESSBOARD_TAG_FAMILY}. {split_msg}")
+        print(f"[pickup] Raw chess ids: {sorted(set(int(t.tag_id) for t in chess_raw))}")
+        return None
+    print(f"[pickup] {split_msg}")
 
     t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
     if t_cam_robot is None:
         return None
 
-    try:
-        board_cfg = _board_pnp_config_for_detections(board_tags)
-    except ValueError as e:
-        print(f"[pickup] {e}")
-        return None
-
-    # Chessboard corner tags only (not playmat 4–7).
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-        board_tags, board_cfg, camera_intrinsic, strict=True
+        board_tags, BOARD_CONFIG, camera_intrinsic, strict=True
     )
     if t_board_to_cam is None:
         print("[pickup] Board PnP failed (need 4 board corners visible).")
@@ -230,7 +189,9 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         "board_state": board_state,
         "robot_frame_centers": robot_frame_centers,
         "t_robot_board": t_robot_board,
-        "tags": tags,
+        "playmat_tags": playmat_raw,
+        "chessboard_tags": chess_raw,
+        "tags": list(playmat_raw) + list(chess_raw),
         "t_cam_robot": t_cam_robot,
         "split_msg": split_msg,
     }
@@ -278,11 +239,15 @@ def show_preview(
             interpolation=cv2.INTER_AREA,
         )
 
-    if vision_meta and vision_meta.get("tags"):
+    if vision_meta and vision_meta.get("playmat_tags") is not None:
         tag_vis = to_bgr_display(raw_img)
         if tag_vis is not None:
             tag_vis = tag_vis.copy()
-            draw_all_tag_overlays(tag_vis, vision_meta["tags"])
+            draw_dual_family_tag_overlays(
+                tag_vis,
+                vision_meta["playmat_tags"],
+                vision_meta["chessboard_tags"],
+            )
             tcr = vision_meta.get("t_cam_robot")
             if tcr is not None:
                 draw_pose_axes(tag_vis, camera_intrinsic, tcr, size=TAG_SIZE)
@@ -328,8 +293,8 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         vision = build_vision_from_piece_continuity(img, camera_intrinsic)
         if vision is None:
             raise RuntimeError(
-                "Vision failed: need playmat tags 4–7 (checkpoint0) and chessboard tags "
-                f"{list(CHESSBOARD_CORNER_TAG_IDS)} (piece_continuity), or duplicate chessboard ids."
+                f"Vision failed: need four corners ids 0–3 in {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four in {CHESSBOARD_TAG_FAMILY} (chessboard). See console lines above."
             )
 
         warped = vision["warped"]
@@ -349,7 +314,8 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
                 to_row,
                 to_col,
                 vision_meta={
-                    "tags": vision["tags"],
+                    "playmat_tags": vision["playmat_tags"],
+                    "chessboard_tags": vision["chessboard_tags"],
                     "t_cam_robot": vision["t_cam_robot"],
                     "split_msg": vision["split_msg"],
                 },
