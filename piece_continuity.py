@@ -329,7 +329,7 @@ def main():
             print(f"two_removals: {two_removals}")
             print(f"one_additions: {one_additions}")
             print(f"two_additions: {two_additions}")
-            print(predicted_move + " was predicted_move")
+            print(f"predicted move: {predicted_move}")
 
 
 
