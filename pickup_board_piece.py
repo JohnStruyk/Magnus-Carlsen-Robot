@@ -54,6 +54,9 @@ SAFE_Z = 0.22
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
+# Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
+# if vision Z is too low. Tune to your setup (measure safe height above the board / table).
+MIN_TOOL_Z_M = 0.05
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
@@ -405,8 +408,15 @@ def move_to_pose(
     """Travel at ``SAFE_Z``, descend to target Z + offset, return mm coords and yaw for lift."""
     xyz = t_robot_target[:3, 3]
     x_mm, y_mm, z_mm = (xyz * 1000.0).tolist()
-    safe_z_mm = SAFE_Z * 1000.0
+    safe_z_mm = max(SAFE_Z * 1000.0, MIN_TOOL_Z_M * 1000.0)
     target_z_mm = z_mm + z_offset_m * 1000.0
+    z_floor_mm = MIN_TOOL_Z_M * 1000.0
+    if target_z_mm < z_floor_mm:
+        print(
+            f"[pickup] Z clamp: requested descend {target_z_mm:.1f} mm → floor {z_floor_mm:.1f} mm "
+            f"(set MIN_TOOL_Z_M if grasps are too high or still too low)."
+        )
+        target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
 
