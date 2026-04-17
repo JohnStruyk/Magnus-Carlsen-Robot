@@ -56,7 +56,7 @@ LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
-MIN_TOOL_Z_M = 0.06
+MIN_TOOL_Z_M = 0.04
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
@@ -78,12 +78,12 @@ PIECE_CONFIG = {
 }
 
 # Static robot-base +Z offset (meters) added at pick/place for each piece — edit these only.
-GRASP_Z_OFFSET_PAWN_M = 0.07126605
-GRASP_Z_OFFSET_KNIGHT_M = 0.08063865
-GRASP_Z_OFFSET_BISHOP_M = 0.08574405
-GRASP_Z_OFFSET_ROOK_M = 0.07204710
-GRASP_Z_OFFSET_QUEEN_M = 0.09427845
-GRASP_Z_OFFSET_KING_M = 0.10915650
+GRASP_Z_OFFSET_PAWN_M = 0.045
+GRASP_Z_OFFSET_KNIGHT_M = 0.05
+GRASP_Z_OFFSET_BISHOP_M = 0.06
+GRASP_Z_OFFSET_ROOK_M = 0.045
+GRASP_Z_OFFSET_QUEEN_M = 0.075
+GRASP_Z_OFFSET_KING_M = 0.085
 
 PIECE_GRASP_Z_OFFSET_M = {
     "pawn": GRASP_Z_OFFSET_PAWN_M,
