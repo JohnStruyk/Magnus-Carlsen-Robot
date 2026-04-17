@@ -138,24 +138,6 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
 
     img_corners = img_corners.reshape(-1, 2)
 
-    '''FINDING TAGS USING APRIL TAG NOT BOARD CONFIG
-    tag_dict = {t.tag_id: t for t in tags if t.tag_id in BOARD_CONFIG["tag_ids"]}
-
-    # Ensure all 4 tags exist
-    if not all(tid in tag_dict for tid in BOARD_CONFIG["tag_ids"]):
-        print("Not all board tags detected.")
-        return
-
-    # Order: BL, TL, TR, BR (must match dst_corners!)
-    img_corners = np.array([
-        tag_dict[0].center,  # bottom-left
-        tag_dict[1].center,  # top-left
-        tag_dict[3].center,  # top-right
-        tag_dict[2].center,  # bottom-right
-    ], dtype=np.float32)
-    '''
-    
-
     dst_corners = np.array([
         [0, H],
         [0, 0],
@@ -227,40 +209,6 @@ def compare_board_states(old_state, new_state):
     two_additions = np.argwhere((old_state != 2) & (new_state == 2))
 
     return one_removals, two_removals, one_additions, two_additions
-
-def determine_move(one_removals, two_removals, one_additions, two_additions):
-
-    if len(one_additions) + len(two_additions) > len(one_removals) + len(two_removals):
-        return "BAD. there are more pieces now than at start of move"
-
-    if len(one_additions) + len(two_additions) + 1 < len(one_removals) + len(two_removals):
-        return "BAD. too many pieces removed"
-
-    if len(one_additions) > 0 and len(two_additions) > 0:
-        return "BAD. both color pieces have moved."
-
-    if len(one_removals) + len(two_removals) == 0:
-        return "BAD. neither color piece has moved."
-
-    if len(one_removals) == 1 and len(one_additions) == 1:
-        if len(two_removals) == 1:
-            return "FINE. team one captured a piece."
-        else:
-            return "FINE. team one made a normal move."
-
-    if len(one_removals) == 2 and len(one_additions) == 2:
-        return "FINE. team one tried to castle."
-
-    if len(two_removals) == 1 and len(two_additions) == 1:
-        if len(one_removals) == 1:
-            return "FINE. team two captured a piece."
-        else:
-            return "FINE. team two made a normal move."
-
-    if len(two_removals) == 2 and len(two_additions) == 2:
-        return "FINE. team two tried to castle."
-
-
 
 def get_board_state(cv_image, detector, camera_intrinsic):
     gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
