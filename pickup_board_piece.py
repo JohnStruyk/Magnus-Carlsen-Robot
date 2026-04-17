@@ -67,15 +67,17 @@ GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
 
-# Chesspiece Calibration
+# Physical piece heights (meters), base to top — used to lift grasp/place targets from the board plane.
 PIECE_CONFIG = {
     "king_height": 0.0950214,
     "queen_height": 0.075184,
     "bishop_height": 0.0638048,
     "knight_height": 0.0569976,
     "rook_height": 0.0455422,
-    "pawn_height":  0.0445008
+    "pawn_height": 0.0445008,
 }
+# Move target along board +Z (in robot frame) by this fraction of piece height (0.5 ≈ body center).
+PIECE_HEIGHT_CENTER_FRACTION = 0.5
 
 # Preview: FROM = yellow, TO = blue (BGR)
 _COLOR_FROM_BGR = (0, 255, 255)
@@ -110,6 +112,14 @@ def algebraic_to_row_col(square: str) -> Tuple[int, int]:
     col = ord(square[0].lower()) - ord("a")
     row = 8 - int(square[1])
     return row, col
+
+
+def piece_height_m(piece_name: str) -> float:
+    """Return calibrated height (m) for ``piece_name`` (``pawn``, ``king``, …)."""
+    key = f"{piece_name}_height"
+    if key not in PIECE_CONFIG:
+        raise KeyError(f"No height in PIECE_CONFIG for piece '{piece_name}' (expected key {key!r}).")
+    return float(PIECE_CONFIG[key])
 
 
 def normalize_piece_type(piece_type: str) -> str:
@@ -211,10 +221,21 @@ def square_to_robot_pose(
     row: int,
     col: int,
     t_robot_board: np.ndarray,
+    piece_name: Optional[str] = None,
 ) -> np.ndarray:
-    """4×4 pose in robot base: translation from ``robot_frame_centers``; rotation from board frame."""
+    """
+    4×4 pose in robot base: board plane hit from vision on XY, board orientation for yaw.
+
+    If ``piece_name`` is set, translation is shifted along the board outward normal (column 2
+    of ``t_robot_board`` rotation) by ``PIECE_HEIGHT_CENTER_FRACTION * piece_height_m(...)`` so
+    pick/place heights follow each piece’s calibrated body height.
+    """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
+    if piece_name is not None:
+        h = piece_height_m(piece_name)
+        n_robot = t_robot_board[:3, 2].astype(np.float64)
+        t = t + n_robot * (h * PIECE_HEIGHT_CENTER_FRACTION)
     pose = np.eye(4, dtype=np.float32)
     pose[:3, :3] = t_robot_board[:3, :3].astype(np.float32)
     pose[:3, 3] = t.astype(np.float32)
@@ -521,10 +542,14 @@ def move_piece(
             raise RuntimeError(f"Source square {from_square} appears empty in vision.")
 
         t_rb = vision.t_robot_board
-        from_pose = square_to_robot_pose(vision.robot_frame_centers, from_row, from_col, t_rb)
-        to_pose = square_to_robot_pose(vision.robot_frame_centers, to_row, to_col, t_rb)
+        from_pose = square_to_robot_pose(
+            vision.robot_frame_centers, from_row, from_col, t_rb, piece_name=piece_name
+        )
+        to_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=piece_name
+        )
 
-        print(f"Moving {piece_name} {from_square} → {to_square}")
+        print(f"Moving {piece_name} {from_square} → {to_square} (height {piece_height_m(piece_name):.4f} m)")
         print(
             f"[pickup] Indices row*8+col: FROM ({from_row},{from_col})={from_row * 8 + from_col}, "
             f"TO ({to_row},{to_col})={to_row * 8 + to_col}"
