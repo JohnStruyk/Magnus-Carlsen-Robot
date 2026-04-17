@@ -1,3 +1,12 @@
+"""
+Pick / place using RRC-style geometry:
+  - Playmat (tags 0–3): checkpoint0.get_transform_camera_robot -> T_cam_robot
+  - Board: piece_continuity BOARD_CONFIG geometry with tag IDs BOARD_TAG_IDS (default 4–7)
+    so corners are not confused with playmat tags in one image.
+
+Physical setup: print AprilTags on the board corners as IDs 4,5,6,7 (same layout as
+BOARD_CONFIG corners 0–3). Use ZED left-camera intrinsics from ZedCamera.
+"""
 import argparse
 import time
 
@@ -7,9 +16,9 @@ from pupil_apriltags import Detector
 from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
+from checkpoint0 import get_transform_camera_robot
 from piece_continuity import (
     BOARD_CONFIG,
-    ROBOT_CALIB_CONFIG,
     detect_pieces,
     get_4x4_transform,
     get_board_centers_local,
@@ -18,10 +27,11 @@ from piece_continuity import (
 from utils.zed_camera import ZedCamera
 
 
-CAMERA_INTRINSIC = np.array(
-    ((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)),
-    dtype=np.float32,
-)
+# RRC-style geometry: playmat gives T_cam_robot via checkpoint0; board gives T_cam_board via piece_continuity.
+# Board tags must NOT share IDs 0–3 with the playmat or PnP will mix corners. Default: board corners use IDs 4–7
+# mapped to the same physical layout as BOARD_CONFIG tag_centers 0–3.
+BOARD_TAG_IDS = [4, 5, 6, 7]
+
 ROBOT_IP_DEFAULT = "192.168.1.159"
 SAFE_Z = 0.22
 GRASP_Z_OFFSET = 0.0001
@@ -30,8 +40,9 @@ PLACE_Z_OFFSET = 0.002
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 GRIPPER_LENGTH_M = 0.067
-ARM_SPEED_TRAVEL_MM_S = 450
-ARM_SPEED_DESCEND_MM_S = 140
+# Very slow for safety / tuning.
+ARM_SPEED_TRAVEL_MM_S = 80
+ARM_SPEED_DESCEND_MM_S = 30
 GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
@@ -118,36 +129,65 @@ def normalize_piece_type(piece_type):
     return mapping[value]
 
 
-def square_to_robot_pose(robot_frame_centers, row, col):
+def _board_config_for_pnp():
+    """
+    Same board geometry as piece_continuity BOARD_CONFIG, but tag IDs 4–7 so they never
+    collide with playmat tags 0–3 in the same image (required for correct PnP).
+    """
+    c = BOARD_CONFIG["tag_centers"]
+    return {
+        **BOARD_CONFIG,
+        "tag_ids": BOARD_TAG_IDS,
+        "tag_centers": {
+            BOARD_TAG_IDS[0]: c[0],
+            BOARD_TAG_IDS[1]: c[1],
+            BOARD_TAG_IDS[2]: c[2],
+            BOARD_TAG_IDS[3]: c[3],
+        },
+    }
+
+
+def square_to_robot_pose(robot_frame_centers, row, col, t_robot_board):
+    """Position from mapped centers; orientation from board frame in robot base (RRC-style)."""
     idx = row * 8 + col
     p_robot = robot_frame_centers[idx]
     pose = np.eye(4, dtype=np.float32)
-    pose[:3, :3] = np.eye(3, dtype=np.float32)
+    pose[:3, :3] = t_robot_board[:3, :3].astype(np.float32)
     pose[:3, 3] = np.array(p_robot[:3], dtype=np.float32)
     return pose
 
 
 def build_vision_from_piece_continuity(img, camera_intrinsic):
     """
-    Build board mapping/state strictly from existing piece_continuity functions.
+    RRC geometry (see Real-Robot-Challenge/checkpoint1.py):
+      - Playmat / robot frame: checkpoint0.get_transform_camera_robot -> T_cam_robot
+      - Board frame: piece_continuity.get_4x4_transform(BOARD) -> T_cam_board
+      - Point in robot base: p_robot = inv(T_cam_robot) @ T_cam_board @ p_board
     """
-    detector = Detector(families="tag36h11 tag25h9")
     gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[-1] == 4 else cv2.COLOR_BGR2GRAY)
+    detector = Detector(families="tag36h11")
     tags = detector.detect(gray)
 
-    t_robot_to_cam, _, _ = get_4x4_transform(tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False)
-    if t_robot_to_cam is None:
+    # Playmat: same PnP as checkpoint0 / RRC (tags 0–3 on mat only).
+    t_cam_robot = get_transform_camera_robot(img, camera_intrinsic)
+    if t_cam_robot is None:
         return None
-    t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
 
-    t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
+    board_cfg = _board_config_for_pnp()
+    t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
+        tags, board_cfg, camera_intrinsic, strict=True
+    )
     if t_board_to_cam is None:
         return None
+
+    # checkpoint1: t_robot_cam = inv(camera_pose) with camera_pose = T_cam_robot
+    t_robot_cam = np.linalg.inv(t_cam_robot)
+    t_robot_board = t_robot_cam @ t_board_to_cam
 
     local_centers = get_board_centers_local(BOARD_CONFIG)
     robot_frame_centers = {}
     for i, p_local in enumerate(local_centers):
-        p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
+        p_robot = t_robot_cam @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
     warped, _ = get_warped(img, b_rvec, b_tvec, camera_intrinsic, square_px=100)
@@ -156,6 +196,7 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         "warped": warped,
         "board_state": board_state,
         "robot_frame_centers": robot_frame_centers,
+        "t_robot_board": t_robot_board,
     }
 
 
@@ -214,10 +255,14 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         if img is None:
             raise RuntimeError("No image from ZED.")
 
-        print("[pickup] Running piece_continuity vision mapping...")
-        vision = build_vision_from_piece_continuity(img, CAMERA_INTRINSIC)
+        print("[pickup] Running vision (RRC playmat + piece_continuity board)...")
+        camera_intrinsic = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, camera_intrinsic)
         if vision is None:
-            raise RuntimeError("Vision failed in piece_continuity (missing playmat/board tags).")
+            raise RuntimeError(
+                "Vision failed: need playmat tags 0–3 (checkpoint0) and board tags "
+                f"{BOARD_TAG_IDS} with geometry from piece_continuity BOARD_CONFIG."
+            )
 
         warped = vision["warped"]
         board_state = vision["board_state"]
@@ -234,8 +279,9 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
                 f"Detected value={from_detected}."
             )
 
-        from_pose = square_to_robot_pose(robot_frame_centers, from_row, from_col)
-        to_pose = square_to_robot_pose(robot_frame_centers, to_row, to_col)
+        t_rb = vision["t_robot_board"]
+        from_pose = square_to_robot_pose(robot_frame_centers, from_row, from_col, t_rb)
+        to_pose = square_to_robot_pose(robot_frame_centers, to_row, to_col, t_rb)
 
         print(f"Moving {piece_name} from {from_square} to {to_square}")
         print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
