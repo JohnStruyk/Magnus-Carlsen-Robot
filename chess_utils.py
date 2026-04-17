@@ -12,10 +12,13 @@ def determine_castle(removals, additions):
             return 'O-O'
         if additions[0, 1] == 2 and additions[1, 1] == 3:
             return 'O-O-O'
+        
+    print("bad csatle")
     return None
 
 
 def determine_capture(capturing_removal, capturing_addition, captured_removal):
+    print("determining cpature")
     if np.abs(capturing_addition[0] - captured_removal[0]) > 1:
         return None 
     if np.abs(capturing_addition[1] - captured_removal[1]) > 1:
