@@ -37,16 +37,6 @@ BOARD_CONFIG = {
 TAG_WIDTH_OFFSET = 17.5
 TAG_HEIGHT_OFFSET = -20.5
 
-# Chesspiece Calibration
-PIECE_CONFIG = {
-    "king_height": 0.0950214,
-    "queen_height": 0.075184,
-    "bishop_height": 0.0638048,
-    "knight_height": 0.0569976,
-    "rook_height": 0.0455422,
-    "pawn_height":  0.0445008
-}
-
 
 # --- 2. TRANSFORMATION LOGIC ---
 
