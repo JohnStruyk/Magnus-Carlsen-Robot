@@ -3,14 +3,20 @@ import time
 
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
 from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
 from checkpoint0 import (
+    APRILTAG_FAMILY,
+    TAG_SIZE,
+    detect_apriltags_gray,
+    draw_all_tag_overlays,
     get_transform_camera_robot_from_tags,
     partition_playmat_and_board_tags,
+    resize_for_preview,
+    to_bgr_display,
 )
+from utils.vis_utils import draw_pose_axes
 from piece_continuity import (
     BOARD_CONFIG,
     detect_pieces,
@@ -25,7 +31,6 @@ from utils.zed_camera import ZedCamera
 # All tags use the same AprilTag family; playmat vs board is by *tag ID* (different codes):
 #   - Preferred: playmat ids 0–3, board corners ids 4–7 (BOARD_TAG_IDS below).
 #   - Or: board reuses 0–3 → need two physical tags per id; partition keeps larger polygon as playmat.
-APRILTAG_FAMILY = "tag36h11"
 BOARD_TAG_IDS = [4, 5, 6, 7]
 
 ROBOT_IP_DEFAULT = "192.168.1.159"
@@ -172,10 +177,7 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
       - Board frame: piece_continuity.get_4x4_transform(BOARD) -> T_cam_board
       - Point in robot base: p_robot = inv(T_cam_robot) @ T_cam_board @ p_board
     """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[-1] == 4 else cv2.COLOR_BGR2GRAY)
-
-    detector = Detector(families=APRILTAG_FAMILY)
-    tags = detector.detect(gray)
+    _, tags = detect_apriltags_gray(img, families=APRILTAG_FAMILY)
     playmat_tags, board_tags, split_msg = partition_playmat_and_board_tags(
         tags, board_tag_ids=tuple(BOARD_TAG_IDS)
     )
@@ -223,12 +225,25 @@ def build_vision_from_piece_continuity(img, camera_intrinsic):
         "board_state": board_state,
         "robot_frame_centers": robot_frame_centers,
         "t_robot_board": t_robot_board,
+        "tags": tags,
+        "t_cam_robot": t_cam_robot,
+        "split_msg": split_msg,
     }
 
 
-def show_preview(raw_img, warped, from_row, from_col, to_row, to_col):
+def show_preview(
+    raw_img,
+    warped,
+    camera_intrinsic,
+    from_row,
+    from_col,
+    to_row,
+    to_col,
+    vision_meta=None,
+):
     """
-    Display warped board with source/destination overlays.
+    Display checkpoint0-style AprilTag overlay (all tags + playmat pose axes) and warped board
+    with source/destination overlays. Same key as checkpoint0: press 'k' to confirm execute.
     """
     preview_img = warped.copy()
     square_px = warped.shape[0] // 8
@@ -258,9 +273,31 @@ def show_preview(raw_img, warped, from_row, from_col, to_row, to_col):
             interpolation=cv2.INTER_AREA,
         )
 
-    cv2.namedWindow("Raw camera", cv2.WINDOW_NORMAL)
+    if vision_meta and vision_meta.get("tags"):
+        tag_vis = to_bgr_display(raw_img)
+        if tag_vis is not None:
+            tag_vis = tag_vis.copy()
+            draw_all_tag_overlays(tag_vis, vision_meta["tags"])
+            tcr = vision_meta.get("t_cam_robot")
+            if tcr is not None:
+                draw_pose_axes(tag_vis, camera_intrinsic, tcr, size=TAG_SIZE)
+            status = vision_meta.get("split_msg", "")
+            line = f"pickup: {status} | board PnP OK"
+            for dy, color, th in ((2, (255, 255, 255), 2), (0, (0, 200, 0), 1)):
+                cv2.putText(
+                    tag_vis,
+                    line,
+                    (12, 86 + dy),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    color,
+                    th,
+                    cv2.LINE_AA,
+                )
+            cv2.namedWindow("pickup: AprilTag preview", cv2.WINDOW_NORMAL)
+            cv2.imshow("pickup: AprilTag preview", resize_for_preview(tag_vis))
+
     cv2.namedWindow("Warped board", cv2.WINDOW_NORMAL)
-    cv2.imshow("Raw camera", raw_img)
     cv2.imshow("Warped board", preview_img)
     key = cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -295,8 +332,23 @@ def move_piece(piece_type, from_square, to_square, robot_ip=ROBOT_IP_DEFAULT, pr
         robot_frame_centers = vision["robot_frame_centers"]
         should_execute = True
         if preview:
-            print("[pickup] Showing preview window (press 'k' to execute)...")
-            should_execute = show_preview(img, warped, from_row, from_col, to_row, to_col)
+            print(
+                "[pickup] Showing preview (AprilTag + warped board; press 'k' to execute)..."
+            )
+            should_execute = show_preview(
+                img,
+                warped,
+                camera_intrinsic,
+                from_row,
+                from_col,
+                to_row,
+                to_col,
+                vision_meta={
+                    "tags": vision["tags"],
+                    "t_cam_robot": vision["t_cam_robot"],
+                    "split_msg": vision["split_msg"],
+                },
+            )
 
         from_detected = int(board_state[from_row, from_col])
         if from_detected == 0:
@@ -353,7 +405,11 @@ def parse_args():
     parser.add_argument("--from-square", required=True, help="Source square in algebraic notation, e.g. b3.")
     parser.add_argument("--to-square", required=True, help="Destination square in algebraic notation, e.g. c4.")
     parser.add_argument("--robot-ip", type=str, default=ROBOT_IP_DEFAULT)
-    parser.add_argument("--preview", action="store_true", help="Show board preview, execute on 'k'.")
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Show AprilTag overlay (checkpoint0-style) + warped board; press 'k' to execute.",
+    )
     return parser.parse_args()
 
 
