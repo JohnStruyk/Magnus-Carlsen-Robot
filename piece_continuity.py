@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from pupil_apriltags import Detector
 from utils.zed_camera import ZedCamera
+import chess_utils
 
 # --- 1. CONFIGURATION ---
 
@@ -25,13 +26,13 @@ BOARD_CONFIG = {
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
         0: [0.0, 0.0],       # Origin: Bottom-Left Tag
-        1: [0.0, 0.15572],       # Top Left
-        2: [0.23713, 0.0],      # Bottom-Right
-        3: [0.23713, 0.15572]       # Top-Right
+        1: [0.0, 0.277],       # Top Left
+        2: [0.52848, 0.0],      # Bottom-Right
+        3: [0.52848, 0.277]       # Top-Right
     },
     # Offset from Tag 0 center to the center of the first chessboard square (0,0)
     #"grid_origin_offset": [0.03, -0.008] 
-    "grid_origin_offset": [0.0175, -0.0205] 
+    "grid_origin_offset": [0.0889, -0.0381] 
 }
 
 TAG_WIDTH_OFFSET = 17.5
@@ -366,6 +367,8 @@ def main():
 
             one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
 
+            predicted_move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
+
             key_pressed = cv2.waitKey(0)
             if key_pressed == ord('k'):
                 break
@@ -378,6 +381,7 @@ def main():
             print(f"two_removals: {two_removals}")
             print(f"one_additions: {one_additions}")
             print(f"two_additions: {two_additions}")
+            print(predicted_move + " was predicted_move")
 
 
 
