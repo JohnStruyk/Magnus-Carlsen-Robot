@@ -19,11 +19,11 @@ def determine_castle(removals, additions):
 
 def determine_capture(capturing_removal, capturing_addition, captured_removal):
     print("determining cpature")
-    if np.abs(capturing_addition[0] - captured_removal[0]) > 1:
-        return None 
-    if np.abs(capturing_addition[1] - captured_removal[1]) > 1:
-        return None 
-    return square_to_alg(capturing_removal) + square_to_alg(capturing_addition)
+    if np.array_equal(capturing_addition, captured_removal):
+        return square_to_alg(capturing_removal) + square_to_alg(capturing_addition)
+    print("BAD. Capturing piece didn't go to captured piece's location")
+    return None
+
 
 def determine_normal_move(moving_removal, moving_addition):
     return square_to_alg(moving_removal) + square_to_alg(moving_addition)
