@@ -8,7 +8,7 @@ from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
 
-CAPTURE_INTERVAL = 10  # seconds between captures
+CAPTURE_INTERVAL = 5  # seconds between captures
 
 # Fallback FEN if board is not in standard starting position.
 # Fill this in if you are starting from a known non-standard position.
@@ -168,6 +168,15 @@ def main():
                                 chess_board.push_uci(move)
                                 turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
                                 prior_board_state = board_state
+
+                                # After a successful white move, it is now black's turn
+                                if turn == chess.BLACK:
+                                    # TODO: Insert robot manipulation logic here.
+                                    # The robot should calculate and execute black's move physically on the board.
+                                    # For now, display the board and wait for a human to move black's piece manually.
+                                    print("Black's turn. Move black's piece, then press any key to continue.")
+                                    display_board_state(warped_with_pieces, resized_raw)
+                                    cv2.destroyAllWindows()
                             except Exception:
                                 all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                                 for rc, color_val in all_removals:
