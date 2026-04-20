@@ -164,13 +164,15 @@ def detect_pieces(warped, square_px):
             total = b+g+r
 
             #classify by color
-            if g > r +30 and b > r+30 and total>130: #green piece, shows up turquoise ish
+            if g > r*2 - 10 and b > r*2 - 10: #green piece, shows up turquoise ish
                 board_state[row,col] = 1
             elif r > b +30 and g > b+30 and total<400: #yellow
                 board_state[row,col] = 2
             elif r > b+30 and r > g+30: #red
                 board_state[row,col] = 2
             
+            #print(f"Row: {row}, Col:{col}\nr: {r}, g: {g}, b: {b}\ntotal: {total}\nBoard_state: {board_state[row,col]}")
+
     return board_state
 
 
