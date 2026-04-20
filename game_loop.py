@@ -85,6 +85,7 @@ def main():
 
     prior_board_state = None
     chess_board = None
+    missing_pieces = {}  # chess.Square -> consecutive cycles missing
 
     for i in range(10):
         print(f"\n--- Iteration {i + 1}/10 ---")
@@ -109,6 +110,29 @@ def main():
             print(f"Chess board initialized from FEN: {fen}")
 
         if prior_board_state is not None:
+            # --- Piece presence check ---
+            abort = False
+            for sq in chess.SQUARES:
+                piece = chess_board.piece_at(sq)
+                if piece is None:
+                    continue
+                row = 7 - chess.square_rank(sq)
+                col = chess.square_file(sq)
+                expected_color_val = 2 if piece.color == chess.WHITE else 1
+                if board_state[row, col] != expected_color_val:
+                    missing_pieces[sq] = missing_pieces.get(sq, 0) + 1
+                    if missing_pieces[sq] >= 2:
+                        color_name = "white" if piece.color == chess.WHITE else "black"
+                        piece_name = chess.piece_name(piece.piece_type)
+                        sq_name = chess.square_name(sq)
+                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 2 cycles.")
+                        abort = True
+                else:
+                    missing_pieces.pop(sq, None)
+
+            if abort:
+                break
+
             one_removals, two_removals, one_additions, two_additions = compare_board_states(
                 prior_board_state, board_state
             )
