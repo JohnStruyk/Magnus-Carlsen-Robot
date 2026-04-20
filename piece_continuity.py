@@ -20,8 +20,8 @@ ROBOT_CALIB_CONFIG = {
 
 # Chessboard Calibration (4 tags on board to establish board-to-camera)
 BOARD_CONFIG = {
-    "tag_size": 0.0265,        
-    "square_size": 0.025,    
+    "tag_size": 0.05867,        
+    "square_size": 0.04365,    
     "grid_size": (8, 8),     
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
@@ -30,7 +30,7 @@ BOARD_CONFIG = {
         2: [0.52848, 0.0],      # Bottom-Right
         3: [0.52848, 0.277]       # Top-Right
     },
-    # Offset from Tag 0 center to the center of the first chessboard square (0,0)
+    # Offset from Tag 0 center to the bottom left corner of the first chessboard square (0,0)
     #"grid_origin_offset": [0.03, -0.008] 
     "grid_origin_offset": [0.0889, -0.0381] 
 }
@@ -39,14 +39,12 @@ TAG_WIDTH_OFFSET = 17.5
 TAG_HEIGHT_OFFSET = -20.5
 
 
-
-
 # --- 2. TRANSFORMATION LOGIC ---
 
 def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     """Calculates the 4x4 transform matrix from the object to the camera."""
-    target_ids = set(config["tag_ids"])
-    found_tags = [t for t in tags if t.tag_id in target_ids]
+    target_ids = set(int(x) for x in config["tag_ids"])
+    found_tags = [t for t in tags if int(t.tag_id) in target_ids]
     
     # Logic to specify what should happen if not all the tags are seen, want all 4 for the chessboard part
     if strict and len(found_tags) < len(target_ids):
@@ -59,8 +57,8 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     half = config["tag_size"] / 2.0
 
     # Sort tags to ensure consistent mapping
-    for tag in sorted(found_tags, key=lambda x: x.tag_id):
-        cx, cy = config["tag_centers"][tag.tag_id]
+    for tag in sorted(found_tags, key=lambda x: int(x.tag_id)):
+        cx, cy = config["tag_centers"][int(tag.tag_id)]
         # World points for tag corners: BL, BR, TR, TL
         wp_corners = [
             [cx - half, cy - half, 0], 
@@ -87,14 +85,13 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     return t_mat, rvec, tvec 
 
 def get_board_centers_local(config):
-    """Generates 3D coordinates for the grid [X, Y, Z, 1]."""
+    """Square centers in board frame. Index ``i = r*8+c`` for nested ``for r: for c:`` (same order as warped ``row,col``)."""
     grid_pts = []
     off_x, off_y = config["grid_origin_offset"]
     s = config["square_size"]
 
     for r in range(config["grid_size"][0]):
         for c in range(config["grid_size"][1]):
-            # +X is Up (rows), +Y is Right (cols)
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
@@ -148,9 +145,8 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
-
-    #img corners are in 2d image space i think
-    return warped, img_corners
+    # img_corners -> warped: p_w ~ H @ p_img, so p_img = H^{-1} @ p_w for drawing on raw image.
+    return warped, img_corners, H_mat
 
 def detect_pieces(warped, square_px):
     board_state = np.zeros((8,8),dtype=int)
@@ -256,7 +252,7 @@ def get_board_state(cv_image, detector, camera_intrinsic):
 
     output_square_px = 100
 
-    warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
+    warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
     
     #Comment this out to remove piece detection
     board_state = detect_pieces(warped, output_square_px)
