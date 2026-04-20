@@ -111,16 +111,41 @@ def main():
             changed = any(len(x) > 0 for x in [one_removals, two_removals, one_additions, two_additions])
 
             if changed:
+                # Determine if this is a valid single move or legal capture
+                is_single_move = (
+                    (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 0 and len(two_additions) == 0) or
+                    (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 0 and len(one_additions) == 0)
+                )
+                is_legal_capture = (
+                    (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 1 and len(two_additions) == 0) or
+                    (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 1 and len(one_additions) == 0)
+                )
+
+                if not is_single_move and not is_legal_capture:
+                    print("Multiple pieces moved. Please return pieces to their original squares:")
+                    for rc in one_removals:
+                        sq = row_col_to_chess_square(*rc)
+                        piece = chess_board.piece_at(sq)
+                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                        print(f"  return black {piece_name} to {chess.square_name(sq)}")
+                    for rc in two_removals:
+                        sq = row_col_to_chess_square(*rc)
+                        piece = chess_board.piece_at(sq)
+                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                        print(f"  return white {piece_name} to {chess.square_name(sq)}")
+                    # Show display but do NOT update prior_board_state
+                    display_board_state(warped_with_pieces, resized_raw)
+                    cv2.destroyAllWindows()
+                    continue
+
                 move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
                 print(f"Change detected! UCI move: {move}")
                 describe_move(chess_board, (one_removals, two_removals), (one_additions, two_additions))
 
-                # Advance the chess board if the move is valid UCI
                 try:
                     chess_board.push_uci(move)
                 except Exception:
                     print(f"  ILLEGAL MOVE: (Could not apply move '{move}' to chess board)")
-                    # TODO: MOVE ILLEGAL PIECE BACK
             else:
                 print("No change detected.")
 
