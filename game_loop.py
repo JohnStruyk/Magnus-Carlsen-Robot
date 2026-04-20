@@ -97,9 +97,6 @@ def main():
             print("Could not detect board this iteration, skipping.")
             continue
 
-        display_board_state(warped_with_pieces, resized_raw)
-        cv2.destroyAllWindows()
-
         # Initialize chess board from first good detection
         if chess_board is None:
             fen = detect_starting_fen(board_state)
@@ -121,22 +118,22 @@ def main():
                 expected_color_val = 2 if piece.color == chess.WHITE else 1
                 if board_state[row, col] != expected_color_val:
                     missing_pieces[sq] = missing_pieces.get(sq, 0) + 1
-                    if missing_pieces[sq] >= 2:
+                    if missing_pieces[sq] >= 3:
                         color_name = "white" if piece.color == chess.WHITE else "black"
                         piece_name = chess.piece_name(piece.piece_type)
                         sq_name = chess.square_name(sq)
-                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 2 cycles.")
+                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 3 cycles.")
                         abort = True
                 else:
                     missing_pieces.pop(sq, None)
 
+            print(f"Missing_pieces: {missing_pieces}")
             if abort:
                 break
 
-            one_removals, two_removals, one_additions, two_additions = compare_board_states(
-                prior_board_state, board_state
-            )
+            one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
             changed = any(len(x) > 0 for x in [one_removals, two_removals, one_additions, two_additions])
+
             if changed:
                 move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
                 print(f"Change detected! UCI move: {move}")
@@ -148,9 +145,12 @@ def main():
                 except Exception:
                     print(f"  ILLEGAL MOVE: (Could not apply move '{move}' to chess board)")
                     # TODO: MOVE ILLEGAL PIECE BACK
-
             else:
                 print("No change detected.")
+
+            display_board_state(warped_with_pieces, resized_raw)
+            cv2.destroyAllWindows()
+
         else:
             print("No prior state to compare against.")
 
