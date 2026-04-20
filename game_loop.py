@@ -107,30 +107,6 @@ def main():
             print(f"Chess board initialized from FEN: {fen}")
 
         if prior_board_state is not None:
-            # --- Piece presence check ---
-            abort = False
-            for sq in chess.SQUARES:
-                piece = chess_board.piece_at(sq)
-                if piece is None:
-                    continue
-                row = 7 - chess.square_rank(sq)
-                col = chess.square_file(sq)
-                expected_color_val = 2 if piece.color == chess.WHITE else 1
-                if board_state[row, col] != expected_color_val:
-                    missing_pieces[sq] = missing_pieces.get(sq, 0) + 1
-                    if missing_pieces[sq] >= 3:
-                        color_name = "white" if piece.color == chess.WHITE else "black"
-                        piece_name = chess.piece_name(piece.piece_type)
-                        sq_name = chess.square_name(sq)
-                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 3 cycles.")
-                        abort = True
-                else:
-                    missing_pieces.pop(sq, None)
-
-            print(f"Missing_pieces: {missing_pieces}")
-            if abort:
-                break
-
             one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
             changed = any(len(x) > 0 for x in [one_removals, two_removals, one_additions, two_additions])
 
@@ -147,6 +123,38 @@ def main():
                     # TODO: MOVE ILLEGAL PIECE BACK
             else:
                 print("No change detected.")
+
+            # --- Piece presence check (after move detection) ---
+            # Build set of squares involved in a move this cycle — these are not "missing"
+            moved_squares = set()
+            for arr in [one_removals, two_removals, one_additions, two_additions]:
+                for rc in arr:
+                    moved_squares.add(row_col_to_chess_square(*rc))
+
+            abort = False
+            for sq in chess.SQUARES:
+                piece = chess_board.piece_at(sq)
+                if piece is None:
+                    continue
+                if sq in moved_squares:
+                    missing_pieces.pop(sq, None)
+                    continue
+                row = 7 - chess.square_rank(sq)
+                col = chess.square_file(sq)
+                expected_color_val = 2 if piece.color == chess.WHITE else 1
+                if board_state[row, col] != expected_color_val:
+                    missing_pieces[sq] = missing_pieces.get(sq, 0) + 1
+                    if missing_pieces[sq] >= 2:
+                        color_name = "white" if piece.color == chess.WHITE else "black"
+                        piece_name = chess.piece_name(piece.piece_type)
+                        sq_name = chess.square_name(sq)
+                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 2 cycles.")
+                        abort = True
+                else:
+                    missing_pieces.pop(sq, None)
+
+            if abort:
+                break
 
             display_board_state(warped_with_pieces, resized_raw)
             cv2.destroyAllWindows()
