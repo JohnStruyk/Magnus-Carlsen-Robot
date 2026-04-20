@@ -122,7 +122,9 @@ def main():
                 try:
                     chess_board.push_uci(move)
                 except Exception:
-                    print(f"  (Could not apply move '{move}' to chess board)")
+                    print(f"  ILLEGAL MOVE: (Could not apply move '{move}' to chess board)")
+                    # TODO: MOVE ILLEGAL PIECE BACK
+
             else:
                 print("No change detected.")
         else:
