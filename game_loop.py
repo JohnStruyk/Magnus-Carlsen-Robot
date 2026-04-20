@@ -144,24 +144,24 @@ def main():
                 expected_color_val = 2 if piece.color == chess.WHITE else 1
                 if board_state[row, col] != expected_color_val:
                     missing_pieces[sq] = missing_pieces.get(sq, 0) + 1
-                    if missing_pieces[sq] >= 2:
+                    if missing_pieces[sq] >= 3:
                         color_name = "white" if piece.color == chess.WHITE else "black"
                         piece_name = chess.piece_name(piece.piece_type)
                         sq_name = chess.square_name(sq)
-                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 2 cycles.")
+                        print(f"ABORT: {color_name} {piece_name} on {sq_name} has been missing for 3 cycles.")
                         abort = True
                 else:
                     missing_pieces.pop(sq, None)
 
+            print(f"Missing Pieces: {missing_pieces}")
             if abort:
                 break
-
-            display_board_state(warped_with_pieces, resized_raw)
-            cv2.destroyAllWindows()
 
         else:
             print("No prior state to compare against.")
 
+        display_board_state(warped_with_pieces, resized_raw)
+        cv2.destroyAllWindows()
         prior_board_state = board_state
 
     zed.close()
