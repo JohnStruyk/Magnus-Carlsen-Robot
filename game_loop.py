@@ -7,6 +7,7 @@ from pupil_apriltags import Detector
 from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
+from stockfish_int import get_best_move
 
 CAPTURE_INTERVAL = 5  # seconds between captures
 
@@ -173,6 +174,13 @@ def main():
                                 if turn == chess.BLACK:
                                     # TODO: Insert robot manipulation logic here.
                                     # The robot should calculate and execute black's move physically on the board.
+                                    robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+
+                                    move_string = robot_move.uci() 
+                                    print(f"Sending move {move_string} to robot arm...")
+
+                                    # TODO: Map move string to robot commands,update chess_board once move is executed
+
                                     # For now, display the board and wait for a human to move black's piece manually.
                                     print("Black's turn. Move black's piece, then press any key to continue.")
                                     display_board_state(warped_with_pieces, resized_raw)
