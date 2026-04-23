@@ -600,43 +600,49 @@ def move_piece_three_params(piece_type: str, from_square: str, to_square: str) -
     """Thin wrapper for callers that only pass ``(piece_type, from_square, to_square)``."""
     move_piece(piece_type, from_square, to_square)
 
-def eject_piece(
-    piece_type: str,
+
+def capture_piece(
+    capturing_piece_type: str,
+    captured_piece_type: str,
     from_square: str,
+    to_square: str,
     robot_ip: str = ROBOT_IP_DEFAULT,
     preview: bool = False,
 ) -> None:
-    """Pick a piece from ``from_square`` and place it off the board."""
-
-    piece_name = normalize_piece_type(piece_type)
+    """Capture one frame, run vision, optionally preview, then pick at ``from_square`` and place at ``to_square``."""
+    capturing_piece_name = normalize_piece_type(capturing_piece_type)
+    captured_piece_name = normalize_piece_type(captured_piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
+    to_row, to_col = algebraic_to_row_col(to_square)
 
     zed = ZedCamera()
     arm: Optional[XArmAPI] = None
-
     try:
-        print("[eject] Capturing camera image...")
+        print("[pickup] Capturing camera image...")
         img = zed.image
         if img is None:
             raise RuntimeError("No image from ZED.")
 
-        print("[eject] Running vision...")
+        print("[pickup] Running vision (playmat + chessboard tags)...")
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
-            raise RuntimeError("Vision failed (missing tags).")
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
 
         execute = True
         if preview:
-            print("[eject] Preview: press 'k' to execute, any other key to cancel.")
+            print("[pickup] Preview: press 'k' to execute, any other key to cancel.")
             execute = show_preview(
                 img,
                 vision.warped,
                 K,
                 from_row,
                 from_col,
-                None,
-                None,
+                to_row,
+                to_col,
                 vision_meta={
                     "playmat_tags": vision.playmat_tags,
                     "chessboard_tags": vision.chessboard_tags,
@@ -646,46 +652,32 @@ def eject_piece(
                     "square_px": vision.square_px,
                 },
                 from_square=from_square,
-                to_square="OFFBOARD",
+                to_square=to_square,
             )
 
         if int(vision.board_state[from_row, from_col]) == 0:
-            raise RuntimeError(f"Source square {from_square} appears empty.")
+            raise RuntimeError(f"Source square {from_square} appears empty in vision.")
 
         t_rb = vision.t_robot_board
-
-        # --- FROM POSE (same as move_piece) ---
-        from_pose = square_to_robot_pose(
-            vision.robot_frame_centers,
-            from_row,
-            from_col,
-            t_rb,
-            piece_name=piece_name,
+        captured_from_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=captured_piece_name
+        )
+        graveyard_pose = square_to_robot_pose(
+            vision.robot_frame_centers, 0, 7, t_rb, piece_name=captured_piece_name
+        )
+        graveyard_pose[0, 3] -= 0.15
+        capturing_from_pose = square_to_robot_pose(
+            vision.robot_frame_centers, from_row, from_col, t_rb, piece_name=capturing_piece_name
+        )
+        capturing_to_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=capturing_piece_name
         )
 
-        # --- OFFBOARD POSE ---
-        # Option 1: relative to board frame (recommended)
-        offboard_offset = np.eye(4)
-        offboard_offset[0, 3] = 0.15   # +15 cm in x (to the right of board)
-        offboard_offset[1, 3] = 0.00   # same y
-        offboard_offset[2, 3] = 0.00   # same height baseline
-
-        to_pose = t_rb @ offboard_offset
-
-        # Adjust Z to a safe placement height
-        to_pose[2, 3] += 0.02  # +2 cm above board plane
-
-        dz = piece_grasp_vertical_offset_m(piece_name)
-
-        print(f"Ejecting {piece_name} from {from_square} → OFFBOARD")
-        print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
-        print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
-
         if not execute:
-            print("Cancelled.")
+            print("Cancelled (preview: press 'k' to run).")
             return
 
-        print("[eject] Connecting to arm...")
+        print("[pickup] Connecting to arm...")
         arm = XArmAPI(robot_ip)
         arm.connect()
         arm.motion_enable(enable=True)
@@ -694,10 +686,12 @@ def eject_piece(
         arm.set_state(0)
         arm.move_gohome(wait=True)
         time.sleep(0.5)
-
-        print("[eject] Executing pick / place...")
-        pickup_pose(arm, from_pose)
-        place_pose(arm, to_pose)
+        print("[pickup] Executing pick / place...")
+        pickup_pose(arm, captured_from_pose)
+        place_pose(arm, graveyard_pose)
+        print(" executing second one now")
+        pickup_pose(arm, capturing_from_pose)
+        place_pose(arm, capturing_to_pose)
 
     finally:
         if arm is not None:
@@ -705,7 +699,6 @@ def eject_piece(
             arm.move_gohome(wait=True)
             time.sleep(0.5)
             arm.disconnect()
-
         zed.close()
         cv2.destroyAllWindows()
 
@@ -724,8 +717,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     a = parse_args()
     if a.captured_piece_type:
-        eject_piece(a.captured_piece_type, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
-    move_piece(a.piece_type, a.from_square, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
+        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square)
+    else:
+        move_piece(a.piece_type, a.from_square, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
 
 
 if __name__ == "__main__":
