@@ -42,6 +42,10 @@ def detect_starting_fen(board_state):
     If board has 32 pieces in standard positions, return standard FEN.
     If CURRENT_FEN is set, return that. Otherwise return None.
     """
+
+    print(board_state)
+    print(STANDARD_BOARD_STATE)
+
     if np.array_equal(board_state, STANDARD_BOARD_STATE):
         print("Standard starting position detected.")
         return STANDARD_STARTING_FEN
@@ -91,8 +95,8 @@ def main():
     chess_board = None
     turn = chess.WHITE  # white moves first
 
-    for i in range(10):
-        print(f"\n--- Iteration {i + 1}/10 ---")
+    for i in range(40):
+        print(f"\n--- Iteration {i + 1}/40 ---")
         loop_start = time.time()
 
         cv_image = zed.image
