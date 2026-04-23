@@ -8,6 +8,7 @@ from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
 from stockfish_int import get_best_move
+from pickup_board_piece import move_piece, capture_piece
 
 CAPTURE_INTERVAL = 5  # seconds between captures
 
@@ -85,6 +86,16 @@ def describe_move(chess_board, removals, additions):
 
     print("  Could not identify moving piece.")
 
+def parse_move_string(chess_board, move_string):
+    from_square = move_string[:2]
+    to_square = move_string[2:]
+    from_occupant = chess_board.piece_at(chess.parse_square(from_square))
+    to_occupant = chess_board.piece_at(chess.parse_square(to_square))
+    from_occupant = from_occupant.symbol()
+    if to_occupant is not None:
+        to_occupant = to_occupant.symbol()
+    
+    return from_square, to_square, from_occupant, to_occupant
 
 def main():
     zed = ZedCamera()
@@ -184,6 +195,13 @@ def main():
                                     print(f"Sending move {move_string} to robot arm...")
 
                                     # TODO: Map move string to robot commands,update chess_board once move is executed
+
+                                    from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+                                    
+                                    if to_occupant is not None:
+                                        capture_piece(from_occupant, to_occupant, from_square, to_square, capture_count=0)
+                                    else:
+                                        move_piece(from_occupant, from_square, to_square)
 
                                     # For now, display the board and wait for a human to move black's piece manually.
                                     print("Black's turn. Move black's piece, then press any key to continue.")
