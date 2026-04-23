@@ -502,6 +502,7 @@ def move_piece(
     piece_type: str,
     from_square: str,
     to_square: str,
+    zed: ZedCamera,
     robot_ip: str = ROBOT_IP_DEFAULT,
     preview: bool = False,
 ) -> None:
@@ -510,7 +511,6 @@ def move_piece(
     from_row, from_col = algebraic_to_row_col(from_square)
     to_row, to_col = algebraic_to_row_col(to_square)
 
-    zed = ZedCamera()
     arm: Optional[XArmAPI] = None
     try:
         print("[pickup] Capturing camera image...")
@@ -592,7 +592,6 @@ def move_piece(
             arm.move_gohome(wait=True)
             time.sleep(0.5)
             arm.disconnect()
-        zed.close()
         cv2.destroyAllWindows()
 
 
@@ -612,6 +611,7 @@ def capture_piece(
     captured_piece_type: str,
     from_square: str,
     to_square: str,
+    zed: ZedCamera,
     capture_count: int = 0,
     robot_ip: str = ROBOT_IP_DEFAULT,
     preview: bool = False,
@@ -622,7 +622,6 @@ def capture_piece(
     from_row, from_col = algebraic_to_row_col(from_square)
     to_row, to_col = algebraic_to_row_col(to_square)
 
-    zed = ZedCamera()
     arm: Optional[XArmAPI] = None
     try:
         print("[pickup] Capturing camera image...")
@@ -699,6 +698,7 @@ def capture_piece(
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, captured_from_pose)
         place_pose(arm, graveyard_pose)
+        arm.move_gohome(wait=True)
         print(" executing second one now")
         pickup_pose(arm, capturing_from_pose)
         place_pose(arm, capturing_to_pose)
@@ -709,7 +709,6 @@ def capture_piece(
             arm.move_gohome(wait=True)
             time.sleep(0.5)
             arm.disconnect()
-        zed.close()
         cv2.destroyAllWindows()
 
 
@@ -725,11 +724,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    zed = ZedCamera()
     a = parse_args()
     if a.captured_piece_type:
-        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square, 1)
+        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square, zed, 1)
     else:
-        move_piece(a.piece_type, a.from_square, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
+        move_piece(a.piece_type, a.from_square, a.to_square, zed, robot_ip=a.robot_ip, preview=a.preview)
+    zed.close()
 
 
 if __name__ == "__main__":

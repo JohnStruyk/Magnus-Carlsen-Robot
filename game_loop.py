@@ -106,6 +106,8 @@ def main():
     chess_board = None
     turn = chess.WHITE  # white moves first
 
+    capture_count = 0
+
     for i in range(40):
         print(f"\n--- Iteration {i + 1}/40 ---")
         loop_start = time.time()
@@ -199,9 +201,10 @@ def main():
                                     from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
                                     
                                     if to_occupant is not None:
-                                        capture_piece(from_occupant, to_occupant, from_square, to_square, capture_count=0)
+                                        capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+                                        capture_count += 1
                                     else:
-                                        move_piece(from_occupant, from_square, to_square)
+                                        move_piece(from_occupant, from_square, to_square, zed)
 
                                     # For now, display the board and wait for a human to move black's piece manually.
                                     print("Black's turn. Move black's piece, then press any key to continue.")
