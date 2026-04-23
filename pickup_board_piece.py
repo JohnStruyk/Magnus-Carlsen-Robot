@@ -715,6 +715,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--piece-type", required=True, help="pawn/knight/bishop/rook/queen/king or P/N/B/R/Q/K")
     p.add_argument("--from-square", required=True, help="Source square, e.g. e5")
     p.add_argument("--to-square", required=True, help="Destination square, e.g. e4")
+    p.add_argument("--captured-piece-type", required=False, help="pawn/knight/bishop/rook/queen/king or P/N/B/R/Q/K")
     p.add_argument("--robot-ip", default=ROBOT_IP_DEFAULT)
     p.add_argument("--preview", action="store_true", help="Show overlays; press 'k' to execute.")
     return p.parse_args()
@@ -722,6 +723,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     a = parse_args()
+    if a.captured_piece_type:
+        eject_piece(a.captured_piece_type, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
     move_piece(a.piece_type, a.from_square, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
 
 
