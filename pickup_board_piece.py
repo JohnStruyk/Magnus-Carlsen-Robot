@@ -600,12 +600,19 @@ def move_piece_three_params(piece_type: str, from_square: str, to_square: str) -
     """Thin wrapper for callers that only pass ``(piece_type, from_square, to_square)``."""
     move_piece(piece_type, from_square, to_square)
 
+def capture_offsets(capture_count, offset_size):
+    graveyard_x = capture_count % 3
+    graveyard_y = capture_count // 3
+    offset_x = offset_size * graveyard_x
+    offset_y = graveyard_y * offset_size
+    return offset_x, offset_y
 
 def capture_piece(
     capturing_piece_type: str,
     captured_piece_type: str,
     from_square: str,
     to_square: str,
+    capture_count: int = 0,
     robot_ip: str = ROBOT_IP_DEFAULT,
     preview: bool = False,
 ) -> None:
@@ -666,6 +673,9 @@ def capture_piece(
             vision.robot_frame_centers, 0, 7, t_rb, piece_name=captured_piece_name
         )
         graveyard_pose[0, 3] -= 0.15
+        capture_offset_x, capture_offset_y = capture_offsets(capture_count, 0.05)
+        graveyard_pose[0, 3] += capture_offset_x
+        graveyard_pose[1, 3] += capture_offset_y
         capturing_from_pose = square_to_robot_pose(
             vision.robot_frame_centers, from_row, from_col, t_rb, piece_name=capturing_piece_name
         )
@@ -717,7 +727,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     a = parse_args()
     if a.captured_piece_type:
-        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square)
+        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square, 1)
     else:
         move_piece(a.piece_type, a.from_square, a.to_square, robot_ip=a.robot_ip, preview=a.preview)
 
