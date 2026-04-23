@@ -600,6 +600,115 @@ def move_piece_three_params(piece_type: str, from_square: str, to_square: str) -
     """Thin wrapper for callers that only pass ``(piece_type, from_square, to_square)``."""
     move_piece(piece_type, from_square, to_square)
 
+def eject_piece(
+    piece_type: str,
+    from_square: str,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+    preview: bool = False,
+) -> None:
+    """Pick a piece from ``from_square`` and place it off the board."""
+
+    piece_name = normalize_piece_type(piece_type)
+    from_row, from_col = algebraic_to_row_col(from_square)
+
+    zed = ZedCamera()
+    arm: Optional[XArmAPI] = None
+
+    try:
+        print("[eject] Capturing camera image...")
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+
+        print("[eject] Running vision...")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError("Vision failed (missing tags).")
+
+        execute = True
+        if preview:
+            print("[eject] Preview: press 'k' to execute, any other key to cancel.")
+            execute = show_preview(
+                img,
+                vision.warped,
+                K,
+                from_row,
+                from_col,
+                None,
+                None,
+                vision_meta={
+                    "playmat_tags": vision.playmat_tags,
+                    "chessboard_tags": vision.chessboard_tags,
+                    "t_cam_robot": vision.t_cam_robot,
+                    "split_msg": vision.split_msg,
+                    "H_warp_to_img": vision.H_warp_to_img,
+                    "square_px": vision.square_px,
+                },
+                from_square=from_square,
+                to_square="OFFBOARD",
+            )
+
+        if int(vision.board_state[from_row, from_col]) == 0:
+            raise RuntimeError(f"Source square {from_square} appears empty.")
+
+        t_rb = vision.t_robot_board
+
+        # --- FROM POSE (same as move_piece) ---
+        from_pose = square_to_robot_pose(
+            vision.robot_frame_centers,
+            from_row,
+            from_col,
+            t_rb,
+            piece_name=piece_name,
+        )
+
+        # --- OFFBOARD POSE ---
+        # Option 1: relative to board frame (recommended)
+        offboard_offset = np.eye(4)
+        offboard_offset[0, 3] = 0.15   # +15 cm in x (to the right of board)
+        offboard_offset[1, 3] = 0.00   # same y
+        offboard_offset[2, 3] = 0.00   # same height baseline
+
+        to_pose = t_rb @ offboard_offset
+
+        # Adjust Z to a safe placement height
+        to_pose[2, 3] += 0.02  # +2 cm above board plane
+
+        dz = piece_grasp_vertical_offset_m(piece_name)
+
+        print(f"Ejecting {piece_name} from {from_square} → OFFBOARD")
+        print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
+        print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
+
+        if not execute:
+            print("Cancelled.")
+            return
+
+        print("[eject] Connecting to arm...")
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+        arm.move_gohome(wait=True)
+        time.sleep(0.5)
+
+        print("[eject] Executing pick / place...")
+        pickup_pose(arm, from_pose)
+        place_pose(arm, to_pose)
+
+    finally:
+        if arm is not None:
+            arm.stop_lite6_gripper()
+            arm.move_gohome(wait=True)
+            time.sleep(0.5)
+            arm.disconnect()
+
+        zed.close()
+        cv2.destroyAllWindows()
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Pick and place a chess piece (ZED + AprilTags + Lite6).")
