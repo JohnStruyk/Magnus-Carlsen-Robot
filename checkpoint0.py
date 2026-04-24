@@ -14,6 +14,7 @@ CHESSBOARD_TAG_FAMILY = "tag25h9"
 APRILTAG_FAMILY = PLAYMAT_TAG_FAMILY
 
 PLAYMAT_TAG_IDS = (0, 1, 2, 3)
+_DETECTOR_CACHE = {}
 
 # Playmat corners in robot frame — ids 0–3 in PLAYMAT_TAG_FAMILY
 TAG_CENTER_COORDINATES = [[0.38, 0.4],
@@ -91,7 +92,10 @@ def detect_apriltags_gray(image, families=None):
         return None, []
     fam = families or APRILTAG_FAMILY
     gray = _to_gray(image)
-    detector = Detector(families=fam)
+    detector = _DETECTOR_CACHE.get(fam)
+    if detector is None:
+        detector = Detector(families=fam)
+        _DETECTOR_CACHE[fam] = detector
     tags = detector.detect(gray, estimate_tag_pose=False)
     return gray, tags
 
@@ -105,8 +109,16 @@ def detect_playmat_and_chessboard_tags(image):
     if image is None:
         return None, [], []
     gray = _to_gray(image)
-    playmat_tags = Detector(families=PLAYMAT_TAG_FAMILY).detect(gray, estimate_tag_pose=False)
-    chess_tags = Detector(families=CHESSBOARD_TAG_FAMILY).detect(gray, estimate_tag_pose=False)
+    playmat_detector = _DETECTOR_CACHE.get(PLAYMAT_TAG_FAMILY)
+    if playmat_detector is None:
+        playmat_detector = Detector(families=PLAYMAT_TAG_FAMILY)
+        _DETECTOR_CACHE[PLAYMAT_TAG_FAMILY] = playmat_detector
+    chess_detector = _DETECTOR_CACHE.get(CHESSBOARD_TAG_FAMILY)
+    if chess_detector is None:
+        chess_detector = Detector(families=CHESSBOARD_TAG_FAMILY)
+        _DETECTOR_CACHE[CHESSBOARD_TAG_FAMILY] = chess_detector
+    playmat_tags = playmat_detector.detect(gray, estimate_tag_pose=False)
+    chess_tags = chess_detector.detect(gray, estimate_tag_pose=False)
     return gray, playmat_tags, chess_tags
 
 

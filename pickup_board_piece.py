@@ -291,19 +291,16 @@ def build_vision_from_piece_continuity(
         return None
     print(f"[pickup] {split_msg}")
 
-    print("[pickup] vision step: board config")
     board_cfg = _board_config_for_pickup()
     if not np.isfinite(camera_intrinsic).all():
         raise RuntimeError("[pickup] camera_intrinsic has non-finite values.")
 
-    print("[pickup] vision step: solve playmat transform")
     t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
     if t_cam_robot is None:
         return None
     if not np.isfinite(t_cam_robot).all():
         raise RuntimeError("[pickup] t_cam_robot has non-finite values.")
 
-    print("[pickup] vision step: solve board transform")
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
         board_tags, board_cfg, camera_intrinsic, strict=True
     )
@@ -315,14 +312,12 @@ def build_vision_from_piece_continuity(
     if not np.isfinite(b_rvec).all() or not np.isfinite(b_tvec).all():
         raise RuntimeError("[pickup] board rvec/tvec has non-finite values.")
 
-    print("[pickup] vision step: compose robot-board transform")
     t_robot_cam = np.linalg.inv(t_cam_robot)
     t_robot_board = t_robot_cam @ t_board_to_cam
     if not np.isfinite(t_robot_board).all():
         raise RuntimeError("[pickup] t_robot_board has non-finite values.")
 
     square_px = 100
-    print("[pickup] vision step: warp board")
     warped, _, H_img_to_warp = get_warped(img, b_rvec, b_tvec, camera_intrinsic, square_px=square_px)
     if warped is None or H_img_to_warp is None:
         raise RuntimeError("[pickup] get_warped returned None.")
@@ -332,7 +327,6 @@ def build_vision_from_piece_continuity(
     if not np.isfinite(H_warp_to_img).all():
         raise RuntimeError("[pickup] H_warp_to_img has non-finite values.")
 
-    print("[pickup] vision step: compute robot-frame centers")
     centers = compute_robot_frame_centers(
         board_cfg, square_px, H_warp_to_img, camera_intrinsic, t_board_to_cam, t_robot_cam
     )
@@ -341,7 +335,6 @@ def build_vision_from_piece_continuity(
     if not np.isfinite(np.array(list(centers.values()), dtype=np.float64)).all():
         raise RuntimeError("[pickup] robot_frame_centers contains non-finite values.")
 
-    print("[pickup] vision step: detect board occupancy")
     board_state = detect_pieces(warped, square_px=square_px)
     if board_state is None:
         raise RuntimeError("[pickup] detect_pieces returned None.")
@@ -717,14 +710,14 @@ def move_piece(
         if arm is not None:
             try:
                 arm.stop_lite6_gripper()
-            except Exception as exc:
-                print(f"[pickup] Ignoring arm cleanup error in stop_lite6_gripper: {exc}")
+            except Exception:
+                pass
             if arm_connected:
                 time.sleep(0.2)
                 try:
                     arm.disconnect()
-                except Exception as exc:
-                    print(f"[pickup] Ignoring arm cleanup error in disconnect: {exc}")
+                except Exception:
+                    pass
         cv2.destroyAllWindows()
 
 
@@ -855,14 +848,14 @@ def capture_piece(
         if arm is not None:
             try:
                 arm.stop_lite6_gripper()
-            except Exception as exc:
-                print(f"[pickup] Ignoring arm cleanup error in stop_lite6_gripper: {exc}")
+            except Exception:
+                pass
             if arm_connected:
                 time.sleep(0.2)
                 try:
                     arm.disconnect()
-                except Exception as exc:
-                    print(f"[pickup] Ignoring arm cleanup error in disconnect: {exc}")
+                except Exception:
+                    pass
         cv2.destroyAllWindows()
 
 
