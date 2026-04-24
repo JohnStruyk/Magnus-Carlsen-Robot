@@ -14,7 +14,7 @@ from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
 from stockfish_int import get_best_move, visualize_board
-from pickup_board_piece import move_piece, capture_piece
+from pickup_board_piece import move_piece, capture_piece, stage_from_graveyard
 
 CAPTURE_INTERVAL = 5  # seconds between captures
 SAVED_GAME_FILE = "stored_game.txt"
@@ -280,6 +280,8 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
         rook_to = chess.square_name(rook_to_sq)
 
         move_piece(king_piece.symbol(), king_from, king_to, zed)
+        # Explicitly stage out before approaching rook to reduce self-collision risk.
+        stage_from_graveyard(rook_piece.symbol(), zed)
         move_piece(rook_piece.symbol(), rook_from, rook_to, zed)
         return move_string
 
@@ -449,7 +451,16 @@ def main():
                                 if turn == chess.BLACK:
                                     try:
                                         robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                        move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
+                                        move_string = robot_move.uci()
+                                        print(f"Sending move {move_string} to robot arm...")
+
+                                        from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+
+                                        if to_occupant is not None:
+                                            capture_count = count_white_captures(chess_board)
+                                            capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+                                        else:
+                                            move_piece(from_occupant, from_square, to_square, zed)
 
                                         # Commit robot's move to the board and flip turn back to white
                                         chess_board.push_uci(move_string)

@@ -706,6 +706,59 @@ def move_piece_three_params(piece_type: str, from_square: str, to_square: str) -
     """Thin wrapper for callers that only pass ``(piece_type, from_square, to_square)``."""
     move_piece(piece_type, from_square, to_square)
 
+
+def stage_from_graveyard(
+    piece_type: str,
+    zed: ZedCamera,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+) -> None:
+    """
+    Perform a safe travel-only staging motion:
+    graveyard hover -> forward entry hover -> graveyard hover.
+    """
+    piece_name = normalize_piece_type(piece_type)
+    arm: Optional[XArmAPI] = None
+    arm_connected = False
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
+        t_rb = vision.t_robot_board
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
+
+
 def capture_offsets(capture_count, offset_size):
     graveyard_x = capture_count % 3
     graveyard_y = capture_count // 3
