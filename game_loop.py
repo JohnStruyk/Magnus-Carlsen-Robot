@@ -227,6 +227,27 @@ signal.signal(signal.SIGINT, _exit_handler)
 signal.signal(signal.SIGTERM, _exit_handler)
 
 
+def detect_castling(chess_board, removals):
+    """
+    Given two removal squares (row, col) for one color, check if any legal castle
+    move matches. Returns the UCI string (e.g. 'e1g1') or None.
+    """
+    removed_squares = {row_col_to_chess_square(r, c) for r, c in [tuple(removals[0]), tuple(removals[1])]}
+    for move in chess_board.legal_moves:
+        if chess_board.is_castling(move):
+            # Castling UCI: king from/to — the rook squares are implied
+            king_from = move.from_square
+            king_to = move.to_square
+            # The rook's from-square depends on kingside vs queenside
+            if chess_board.is_kingside_castling(move):
+                rook_from = chess.H1 if chess_board.turn == chess.WHITE else chess.H8
+            else:
+                rook_from = chess.A1 if chess_board.turn == chess.WHITE else chess.A8
+            if removed_squares == {king_from, rook_from}:
+                return move.uci()
+    return None
+
+
 def main():
     faulthandler.enable(all_threads=True)
     zed = ZedCamera()
@@ -296,8 +317,49 @@ def main():
                                 (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 1 and len(two_additions) == 0) or
                                 (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 1 and len(one_additions) == 0)
                             )
+                            is_castle = (
+                                (len(one_removals) == 2 and len(one_additions) == 2 and len(two_removals) == 0 and len(two_additions) == 0) or
+                                (len(two_removals) == 2 and len(two_additions) == 2 and len(one_removals) == 0 and len(one_additions) == 0)
+                            )
 
-                            if not is_single_move and not is_legal_capture:
+                            if is_castle:
+                                castle_color_val = 1 if len(one_removals) == 2 else 2
+                                removals = one_removals if castle_color_val == 1 else two_removals
+                                castle_move = detect_castling(chess_board, removals)
+                                if castle_move is None:
+                                    print("Looks like castling but no legal castle move found. Please return pieces.")
+                                else:
+                                    print(f"Castling detected! UCI move: {castle_move}")
+                                    try:
+                                        chess_board.push_uci(castle_move)
+                                        _chess_board_ref[0] = chess_board
+                                        turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
+                                        prior_board_state = board_state
+                                        print(f"Castling applied: {castle_move}")
+                                    except Exception as e:
+                                        print(f"  ILLEGAL CASTLE ({e}): please return pieces to original squares.")
+                                        continue
+
+                                    # Robot responds if it was white who castled
+                                    if turn == chess.BLACK:
+                                        try:
+                                            robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+                                            move_string = robot_move.uci()
+                                            print(f"Sending move {move_string} to robot arm...")
+                                            from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+                                            if to_occupant is not None:
+                                                capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+                                                capture_count += 1
+                                            else:
+                                                move_piece(from_occupant, from_square, to_square, zed)
+                                            chess_board.push_uci(move_string)
+                                            _chess_board_ref[0] = chess_board
+                                            turn = chess.WHITE
+                                            print(f"Robot played {move_string}. White's turn.")
+                                        except Exception as e:
+                                            print(f"  Robot move failed: {e}")
+
+                            elif not is_single_move and not is_legal_capture:
                                 all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                                 if all_removals:
                                     print("Invalid board change. Please return pieces to their original squares:")
