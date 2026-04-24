@@ -66,6 +66,9 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
+GRAVEYARD_ANCHOR_ROW = 0
+GRAVEYARD_ANCHOR_COL = 7
+GRAVEYARD_X_SHIFT_M = -0.15
 
 # Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
 PIECE_CONFIG = {
@@ -492,6 +495,34 @@ def place_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
         speed=ARM_SPEED_TRAVEL_MM_S, is_radian=False, wait=True,
     )
 
+def build_graveyard_pose(
+    robot_frame_centers: Dict[int, List[float]],
+    t_robot_board: np.ndarray,
+    piece_name: str,
+) -> np.ndarray:
+    """Create the base graveyard pose used for hover transitions."""
+    graveyard_pose = square_to_robot_pose(
+        robot_frame_centers,
+        GRAVEYARD_ANCHOR_ROW,
+        GRAVEYARD_ANCHOR_COL,
+        t_robot_board,
+        piece_name=piece_name,
+    )
+    graveyard_pose[0, 3] += GRAVEYARD_X_SHIFT_M
+    return graveyard_pose
+
+
+def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
+    """Move above target XY at SAFE_Z without descending."""
+    xyz = t_robot_target[:3, 3]
+    x_mm, y_mm, _ = (xyz * 1000.0).tolist()
+    safe_z_mm = max(SAFE_Z * 1000.0, MIN_TOOL_Z_M * 1000.0)
+    _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    arm.set_position(
+        x_mm, y_mm, safe_z_mm, TOOL_ROLL_DEG, TOOL_PITCH_DEG, yaw_deg,
+        speed=ARM_SPEED_TRAVEL_MM_S, is_radian=False, wait=True,
+    )
+
 
 # =============================================================================
 # End-to-end pick / place
@@ -512,6 +543,7 @@ def move_piece(
     to_row, to_col = algebraic_to_row_col(to_square)
 
     arm: Optional[XArmAPI] = None
+    graveyard_hover_pose: Optional[np.ndarray] = None
     try:
         print("[pickup] Capturing camera image...")
         img = zed.image
@@ -560,6 +592,7 @@ def move_piece(
         to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=piece_name
         )
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
 
         dz = piece_grasp_vertical_offset_m(piece_name)
         print(f"Moving {piece_name} {from_square} → {to_square} (grasp +Z offset {dz * 1000:.2f} mm)")
@@ -581,7 +614,7 @@ def move_piece(
         arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
         arm.set_mode(0)
         arm.set_state(0)
-        arm.move_gohome(wait=True)
+        hover_pose(arm, graveyard_hover_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, from_pose)
@@ -589,7 +622,8 @@ def move_piece(
     finally:
         if arm is not None:
             arm.stop_lite6_gripper()
-            arm.move_gohome(wait=True)
+            if graveyard_hover_pose is not None:
+                hover_pose(arm, graveyard_hover_pose)
             time.sleep(0.5)
             arm.disconnect()
         cv2.destroyAllWindows()
@@ -623,6 +657,8 @@ def capture_piece(
     to_row, to_col = algebraic_to_row_col(to_square)
 
     arm: Optional[XArmAPI] = None
+    graveyard_pose: Optional[np.ndarray] = None
+    graveyard_hover_pose: Optional[np.ndarray] = None
     try:
         print("[pickup] Capturing camera image...")
         img = zed.image
@@ -668,6 +704,9 @@ def capture_piece(
         captured_from_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=captured_piece_name
         )
+        graveyard_hover_pose = build_graveyard_pose(
+            vision.robot_frame_centers, t_rb, captured_piece_name
+        )
         graveyard_pose = square_to_robot_pose(
             vision.robot_frame_centers, 0, 7, t_rb, piece_name=captured_piece_name
         )
@@ -693,12 +732,12 @@ def capture_piece(
         arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
         arm.set_mode(0)
         arm.set_state(0)
-        arm.move_gohome(wait=True)
+        hover_pose(arm, graveyard_hover_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, captured_from_pose)
         place_pose(arm, graveyard_pose)
-        arm.move_gohome(wait=True)
+        hover_pose(arm, graveyard_hover_pose)
         print(" executing second one now")
         pickup_pose(arm, capturing_from_pose)
         place_pose(arm, capturing_to_pose)
@@ -706,7 +745,8 @@ def capture_piece(
     finally:
         if arm is not None:
             arm.stop_lite6_gripper()
-            arm.move_gohome(wait=True)
+            if graveyard_hover_pose is not None:
+                hover_pose(arm, graveyard_hover_pose)
             time.sleep(0.5)
             arm.disconnect()
         cv2.destroyAllWindows()
