@@ -1,3 +1,6 @@
+*.svg
+*.txt
+
 __pycache__/
 *.pyc
 *.pyo
