@@ -120,9 +120,11 @@ def load_saved_game():
 
 
 def show_board_and_wait(chess_board):
-    """Render the board as SVG, open in browser, then wait for Enter to continue."""
+    """Render the board as SVG in browser, wait for Enter, then clean up the file."""
     visualize_board(chess_board)
     input("Board displayed in browser. Press Enter to start the game loop...")
+    if os.path.exists("current_board.svg"):
+        os.remove("current_board.svg")
 
 
 def prompt_continue_saved_game():
@@ -140,6 +142,9 @@ def prompt_continue_saved_game():
             print("Resuming saved game.")
             show_board_and_wait(board)
             return board, True
+        else:
+            os.remove(SAVED_GAME_FILE)
+            print("Saved game deleted. Starting fresh.")
     return None, False
 
 
