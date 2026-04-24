@@ -50,7 +50,7 @@ HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
 # Robot motion (Lite6 + parallel gripper)
 # ---------------------------------------------------------------------------
 ROBOT_IP_DEFAULT = "192.168.1.159"
-SAFE_Z = 0.1275
+SAFE_Z = 0.14
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
