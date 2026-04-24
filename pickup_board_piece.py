@@ -711,6 +711,8 @@ def move_piece(
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, from_pose)
         place_pose(arm, to_pose)
+        # Park away from board after a successful move.
+        hover_pose(arm, graveyard_hover_pose)
     finally:
         if arm is not None:
             try:
@@ -846,6 +848,8 @@ def capture_piece(
         hover_pose(arm, forward_entry_pose)
         pickup_pose(arm, capturing_from_pose)
         place_pose(arm, capturing_to_pose)
+        # Park away from board after a successful capture sequence.
+        hover_pose(arm, graveyard_hover_pose)
 
     finally:
         if arm is not None:
