@@ -113,6 +113,61 @@ def parse_move_string(chess_board, move_string):
     
     return from_square, to_square, from_occupant, to_occupant
 
+
+def print_game_over_banner(chess_board):
+    """Print an animated game-over report for terminal visibility."""
+    outcome = chess_board.outcome(claim_draw=True)
+    termination = outcome.termination.name.replace("_", " ").title() if outcome else "Unknown"
+    result = outcome.result() if outcome else chess_board.result(claim_draw=True)
+
+    if result == "1-0":
+        winner_line = "Winner: White"
+    elif result == "0-1":
+        winner_line = "Winner: Black"
+    else:
+        winner_line = "Winner: None (Draw)"
+
+    if chess_board.is_checkmate():
+        reason_line = "Reason: Checkmate delivered. The side to move has no legal escape."
+    elif chess_board.is_stalemate():
+        reason_line = "Reason: Stalemate. No legal moves remain, but the king is not in check."
+    elif chess_board.is_insufficient_material():
+        reason_line = "Reason: Draw by insufficient material."
+    elif chess_board.is_fifty_moves():
+        reason_line = "Reason: Draw by fifty-move rule."
+    elif chess_board.is_repetition(3):
+        reason_line = "Reason: Draw by threefold repetition."
+    else:
+        reason_line = f"Reason: {termination}."
+
+    def _type_line(text: str, delay_s: float = 0.01) -> None:
+        for ch in text:
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+            time.sleep(delay_s)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    frames = [
+        ("#" * 72, "GAME OVER".center(72), "#" * 72),
+        ("*" * 72, "CHECKMATE CHRONICLE".center(72), "*" * 72),
+        ("=" * 72, "FINAL POSITION LOCKED".center(72), "=" * 72),
+    ]
+
+    print()
+    for top, middle, bottom in frames:
+        print(top)
+        print(middle)
+        print(bottom)
+        time.sleep(0.12)
+
+    _type_line(f"Final result      : {result}", delay_s=0.008)
+    _type_line(f"{winner_line}", delay_s=0.008)
+    _type_line(f"{reason_line}", delay_s=0.006)
+    _type_line(f"Termination type  : {termination}", delay_s=0.008)
+    _type_line(f"Final FEN         : {chess_board.fen()}", delay_s=0.003)
+    print("=" * 72 + "\n")
+
 def save_game_state(chess_board):
     """Save the current board FEN to stored_game.txt."""
     if chess_board is not None:
@@ -265,6 +320,9 @@ def main():
                                         checked_side = "White" if chess_board.turn == chess.WHITE else "Black"
                                         print(f"Check: {checked_side} is in check.")
                                     prior_board_state = board_state
+                                    if chess_board.is_game_over(claim_draw=True):
+                                        print_game_over_banner(chess_board)
+                                        break
                                 except Exception as e:
                                     print(f"  ILLEGAL MOVE ({e}): please return pieces to original squares.")
                                     all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
@@ -298,6 +356,9 @@ def main():
                                         if chess_board.is_check():
                                             checked_side = "White" if chess_board.turn == chess.WHITE else "Black"
                                             print(f"Check: {checked_side} is in check.")
+                                        if chess_board.is_game_over(claim_draw=True):
+                                            print_game_over_banner(chess_board)
+                                            break
                                         # Refresh baseline from a post-robot frame so the next loop
                                         # does not re-detect the robot's own move as a new change.
                                         # Keep trying until we successfully get a board state.
