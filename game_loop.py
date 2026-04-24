@@ -1,16 +1,22 @@
 import cv2
 import time
+import signal
+import sys
+import os
 import numpy as np
 import chess
+import chess.svg
+import webbrowser
 from pupil_apriltags import Detector
 
 from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
-from stockfish_int import get_best_move
+from stockfish_int import get_best_move, visualize_board
 from pickup_board_piece import move_piece, capture_piece
 
 CAPTURE_INTERVAL = 5  # seconds between captures
+SAVED_GAME_FILE = "stored_game.txt"
 
 # Fallback FEN if board is not in standard starting position.
 # Fill this in if you are starting from a known non-standard position.
@@ -97,139 +103,187 @@ def parse_move_string(chess_board, move_string):
     
     return from_square, to_square, from_occupant, to_occupant
 
+def save_game_state(chess_board):
+    """Save the current board FEN to stored_game.txt."""
+    if chess_board is not None:
+        with open(SAVED_GAME_FILE, "w") as f:
+            f.write(chess_board.fen())
+        print(f"\nGame saved to {SAVED_GAME_FILE}")
+
+
+def load_saved_game():
+    """Return the FEN string from stored_game.txt, or None if it doesn't exist."""
+    if os.path.exists(SAVED_GAME_FILE):
+        with open(SAVED_GAME_FILE, "r") as f:
+            return f.read().strip()
+    return None
+
+
+def show_board_and_wait(chess_board):
+    """Render the board as SVG, open in browser, then wait for Enter to continue."""
+    visualize_board(chess_board)
+    input("Board displayed in browser. Press Enter to start the game loop...")
+
+
+def prompt_continue_saved_game():
+    """
+    If a saved game file exists, ask the user if they want to continue it.
+    Returns (chess_board, resumed) where resumed=True means we loaded the save.
+    """
+    saved_fen = load_saved_game()
+    if saved_fen:
+        print(f"\nSaved game found in '{SAVED_GAME_FILE}'.")
+        print(f"  FEN: {saved_fen}")
+        answer = input("Continue saved game? [y/N]: ").strip().lower()
+        if answer == "y":
+            board = chess.Board(saved_fen)
+            print("Resuming saved game.")
+            show_board_and_wait(board)
+            return board, True
+    return None, False
+
+
+# Global reference so the signal handler can access the board
+_chess_board_ref = [None]
+
+
+def _exit_handler(signum, frame):
+    save_game_state(_chess_board_ref[0])
+    sys.exit(0)
+
+
+# Register save-on-exit for SIGINT (Ctrl+C) and SIGTERM
+signal.signal(signal.SIGINT, _exit_handler)
+signal.signal(signal.SIGTERM, _exit_handler)
+
+
 def main():
     zed = ZedCamera()
     detector = Detector(families='tag36h11 tag25h9')
     camera_intrinsic = zed.camera_intrinsic
 
     prior_board_state = None
-    chess_board = None
-    turn = chess.WHITE  # white moves first
-
     capture_count = 0
 
-    for i in range(40):
-        print(f"\n--- Iteration {i + 1}/40 ---")
-        loop_start = time.time()
+    # --- Saved game check ---
+    chess_board, resumed = prompt_continue_saved_game()
+    turn = chess_board.turn if resumed else chess.WHITE
+    _chess_board_ref[0] = chess_board  # keep signal handler in sync
 
-        cv_image = zed.image
-        board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
+    try:
+        for i in range(40):
+            print(f"\n--- Iteration {i + 1}/40 ---")
+            loop_start = time.time()
 
-        if board_state is None:
-            print("Could not detect board this iteration, skipping.")
-        else:
-            # Initialize chess board from first good detection
-            if chess_board is None:
-                fen = detect_starting_fen(board_state)
-                if fen is None:
-                    print("WARNING: Unknown board state. Set CURRENT_FEN at the top of game_loop.py and restart.")
-                    break
-                chess_board = chess.Board(fen)
-                print(f"Chess board initialized from FEN: {fen}")
+            cv_image = zed.image
+            board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
 
-            if prior_board_state is not None:
-                one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
-                changed = any(len(x) > 0 for x in [one_removals, two_removals, one_additions, two_additions])
-
-                if changed:
-                    # Check whose pieces moved: color_val 1=black, 2=white
-                    moving_color_val = None
-                    if (len(one_removals) > 0 or len(one_additions) > 0) and len(two_removals) == 0 and len(two_additions) == 0:
-                        moving_color_val = 1  # black moved
-                    elif (len(two_removals) > 0 or len(two_additions) > 0) and len(one_removals) == 0 and len(one_additions) == 0:
-                        moving_color_val = 2  # white moved
-
-                    # Wrong turn check
-                    expected_color_val = 2 if turn == chess.WHITE else 1
-                    if moving_color_val is not None and moving_color_val != expected_color_val:
-                        wrong_color = "black" if moving_color_val == 1 else "white"
-                        right_color = "white" if turn == chess.WHITE else "black"
-                        print(f"Wrong turn: {wrong_color} moved but it is {right_color}'s turn.")
-                        all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
-                        for rc, color_val in all_removals:
-                            sq = row_col_to_chess_square(*rc)
-                            piece = chess_board.piece_at(sq)
-                            color_name = "white" if color_val == 2 else "black"
-                            piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
-                            print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
-                        # display_board_state(warped_with_pieces, resized_raw)
-                        # cv2.destroyAllWindows()
-                    else:
-                        # Determine if this is a valid single move or legal capture
-                        is_single_move = (
-                            (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 0 and len(two_additions) == 0) or
-                            (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 0 and len(one_additions) == 0)
-                        )
-                        is_legal_capture = (
-                            (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 1 and len(two_additions) == 0) or
-                            (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 1 and len(one_additions) == 0)
-                        )
-
-                        if not is_single_move and not is_legal_capture:
-                            all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
-                            if all_removals:
-                                print("Invalid board change. Please return pieces to their original squares:")
-                                for rc, color_val in all_removals:
-                                    sq = row_col_to_chess_square(*rc)
-                                    piece = chess_board.piece_at(sq)
-                                    color_name = "white" if color_val == 2 else "black"
-                                    piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
-                                    print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
-                            # display_board_state(warped_with_pieces, resized_raw)
-                            # cv2.destroyAllWindows()
-                        else:
-                            move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
-                            print(f"Change detected! UCI move: {move}")
-                            describe_move(chess_board, (one_removals, two_removals), (one_additions, two_additions))
-
-                            try:
-                                chess_board.push_uci(move)
-                                turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
-                                prior_board_state = board_state
-
-                                # After a successful white move, it is now black's turn
-                                if turn == chess.BLACK:
-                                    # The robot should calculate and execute black's move physically on the board.
-                                    robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-
-                                    move_string = robot_move.uci() 
-                                    print(f"Sending move {move_string} to robot arm...")
-
-                                    from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
-                                    
-                                    if to_occupant is not None:
-                                        capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                                        capture_count += 1
-                                    else:
-                                        move_piece(from_occupant, from_square, to_square, zed)
-
-                                    # For now, display the board and wait for a human to move black's piece manually.
-                                    # print("Black's turn. Move black's piece, then press any key to continue.")
-                                    # display_board_state(warped_with_pieces, resized_raw)
-                                    # cv2.destroyAllWindows()
-                            except Exception:
-                                all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
-                                for rc, color_val in all_removals:
-                                    sq = row_col_to_chess_square(*rc)
-                                    piece = chess_board.piece_at(sq)
-                                    color_name = "white" if color_val == 2 else "black"
-                                    piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
-                                    print(f"  ILLEGAL MOVE: return {color_name} {piece_name} to {chess.square_name(sq)}")
-                            # display_board_state(warped_with_pieces, resized_raw)
-                            # cv2.destroyAllWindows()
-                else:
-                    print("No change detected.")
+            if board_state is None:
+                print("Could not detect board this iteration, skipping.")
             else:
-                prior_board_state = board_state
-                print("No prior state to compare against.")
+                # Initialize chess board from first good detection (skip if resumed from save)
+                if chess_board is None:
+                    fen = detect_starting_fen(board_state)
+                    if fen is None:
+                        print("WARNING: Unknown board state. Set CURRENT_FEN at the top of game_loop.py and restart.")
+                        break
+                    chess_board = chess.Board(fen)
+                    _chess_board_ref[0] = chess_board
+                    print(f"Chess board initialized from FEN: {fen}")
 
-        # display_board_state(warped_with_pieces, resized_raw)
-        # cv2.destroyAllWindows()
+                if prior_board_state is not None:
+                    one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
+                    changed = any(len(x) > 0 for x in [one_removals, two_removals, one_additions, two_additions])
 
-        elapsed = time.time() - loop_start
-        sleep_time = max(0, CAPTURE_INTERVAL - elapsed)
-        print(f"Sleeping {sleep_time:.1f}s until next capture.")
-        time.sleep(sleep_time)
+                    if changed:
+                        # Check whose pieces moved: color_val 1=black, 2=white
+                        moving_color_val = None
+                        if (len(one_removals) > 0 or len(one_additions) > 0) and len(two_removals) == 0 and len(two_additions) == 0:
+                            moving_color_val = 1  # black moved
+                        elif (len(two_removals) > 0 or len(two_additions) > 0) and len(one_removals) == 0 and len(one_additions) == 0:
+                            moving_color_val = 2  # white moved
+
+                        # Wrong turn check
+                        expected_color_val = 2 if turn == chess.WHITE else 1
+                        if moving_color_val is not None and moving_color_val != expected_color_val:
+                            wrong_color = "black" if moving_color_val == 1 else "white"
+                            right_color = "white" if turn == chess.WHITE else "black"
+                            print(f"Wrong turn: {wrong_color} moved but it is {right_color}'s turn.")
+                            all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
+                            for rc, color_val in all_removals:
+                                sq = row_col_to_chess_square(*rc)
+                                piece = chess_board.piece_at(sq)
+                                color_name = "white" if color_val == 2 else "black"
+                                piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                                print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
+                        else:
+                            # Determine if this is a valid single move or legal capture
+                            is_single_move = (
+                                (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 0 and len(two_additions) == 0) or
+                                (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 0 and len(one_additions) == 0)
+                            )
+                            is_legal_capture = (
+                                (len(one_removals) == 1 and len(one_additions) == 1 and len(two_removals) == 1 and len(two_additions) == 0) or
+                                (len(two_removals) == 1 and len(two_additions) == 1 and len(one_removals) == 1 and len(one_additions) == 0)
+                            )
+
+                            if not is_single_move and not is_legal_capture:
+                                all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
+                                if all_removals:
+                                    print("Invalid board change. Please return pieces to their original squares:")
+                                    for rc, color_val in all_removals:
+                                        sq = row_col_to_chess_square(*rc)
+                                        piece = chess_board.piece_at(sq)
+                                        color_name = "white" if color_val == 2 else "black"
+                                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                                        print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
+                            else:
+                                move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
+                                print(f"Change detected! UCI move: {move}")
+                                describe_move(chess_board, (one_removals, two_removals), (one_additions, two_additions))
+
+                                try:
+                                    chess_board.push_uci(move)
+                                    _chess_board_ref[0] = chess_board
+                                    turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
+                                    prior_board_state = board_state
+
+                                    # After a successful white move, it is now black's turn
+                                    if turn == chess.BLACK:
+                                        robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+                                        move_string = robot_move.uci()
+                                        print(f"Sending move {move_string} to robot arm...")
+
+                                        from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+
+                                        if to_occupant is not None:
+                                            capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+                                            capture_count += 1
+                                        else:
+                                            move_piece(from_occupant, from_square, to_square, zed)
+
+                                except Exception:
+                                    all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
+                                    for rc, color_val in all_removals:
+                                        sq = row_col_to_chess_square(*rc)
+                                        piece = chess_board.piece_at(sq)
+                                        color_name = "white" if color_val == 2 else "black"
+                                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                                        print(f"  ILLEGAL MOVE: return {color_name} {piece_name} to {chess.square_name(sq)}")
+                    else:
+                        print("No change detected.")
+                else:
+                    prior_board_state = board_state
+                    print("No prior state to compare against.")
+
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, CAPTURE_INTERVAL - elapsed)
+            print(f"Sleeping {sleep_time:.1f}s until next capture.")
+            time.sleep(sleep_time)
+
+    finally:
+        # Save game state on any exit (normal finish, exception, etc.)
+        save_game_state(_chess_board_ref[0])
 
 
 if __name__ == "__main__":
