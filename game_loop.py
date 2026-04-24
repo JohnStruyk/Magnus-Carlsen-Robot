@@ -253,6 +253,9 @@ def main():
                                     chess_board.push_uci(move)
                                     _chess_board_ref[0] = chess_board
                                     turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
+                                    if chess_board.is_check():
+                                        checked_side = "White" if chess_board.turn == chess.WHITE else "Black"
+                                        print(f"Check: {checked_side} is in check.")
                                     prior_board_state = board_state
                                 except Exception as e:
                                     print(f"  ILLEGAL MOVE ({e}): please return pieces to original squares.")
@@ -284,6 +287,9 @@ def main():
                                         chess_board.push_uci(move_string)
                                         _chess_board_ref[0] = chess_board
                                         turn = chess.WHITE
+                                        if chess_board.is_check():
+                                            checked_side = "White" if chess_board.turn == chess.WHITE else "Black"
+                                            print(f"Check: {checked_side} is in check.")
                                         # Refresh baseline from a post-robot frame so the next loop
                                         # does not re-detect the robot's own move as a new change.
                                         # Keep trying until we successfully get a board state.
