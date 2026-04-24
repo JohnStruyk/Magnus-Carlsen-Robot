@@ -248,6 +248,51 @@ def detect_castling(chess_board, removals):
     return None
 
 
+def execute_robot_move_on_board(chess_board, robot_move, zed):
+    """
+    Physically execute a robot move.
+    Handles normal moves, captures, and castling (king + rook movement).
+    """
+    move_string = robot_move.uci()
+    print(f"Sending move {move_string} to robot arm...")
+
+    if chess_board.is_castling(robot_move):
+        king_from_sq = robot_move.from_square
+        king_to_sq = robot_move.to_square
+        king_piece = chess_board.piece_at(king_from_sq)
+        if king_piece is None:
+            raise RuntimeError("Castling failed: king piece not found on from-square.")
+
+        if chess_board.is_kingside_castling(robot_move):
+            rook_from_sq = chess.H1 if chess_board.turn == chess.WHITE else chess.H8
+            rook_to_sq = chess.F1 if chess_board.turn == chess.WHITE else chess.F8
+        else:
+            rook_from_sq = chess.A1 if chess_board.turn == chess.WHITE else chess.A8
+            rook_to_sq = chess.D1 if chess_board.turn == chess.WHITE else chess.D8
+
+        rook_piece = chess_board.piece_at(rook_from_sq)
+        if rook_piece is None:
+            raise RuntimeError("Castling failed: rook piece not found on from-square.")
+
+        king_from = chess.square_name(king_from_sq)
+        king_to = chess.square_name(king_to_sq)
+        rook_from = chess.square_name(rook_from_sq)
+        rook_to = chess.square_name(rook_to_sq)
+
+        move_piece(king_piece.symbol(), king_from, king_to, zed)
+        move_piece(rook_piece.symbol(), rook_from, rook_to, zed)
+        return move_string
+
+    from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+    if to_occupant is not None:
+        capture_count = count_white_captures(chess_board)
+        capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+    else:
+        move_piece(from_occupant, from_square, to_square, zed)
+
+    return move_string
+
+
 def main():
     faulthandler.enable(all_threads=True)
     zed = ZedCamera()
@@ -266,14 +311,7 @@ def main():
         if resumed and turn == chess.BLACK:
             try:
                 robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                move_string = robot_move.uci()
-                print(f"Resuming: it is black's turn. Sending move {move_string} to robot arm...")
-                from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
-                if to_occupant is not None:
-                    capture_count = count_white_captures(chess_board)
-                    capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                else:
-                    move_piece(from_occupant, from_square, to_square, zed)
+                move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
                 chess_board.push_uci(move_string)
                 _chess_board_ref[0] = chess_board
                 turn = chess.WHITE
@@ -362,14 +400,7 @@ def main():
                                     if turn == chess.BLACK:
                                         try:
                                             robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                            move_string = robot_move.uci()
-                                            print(f"Sending move {move_string} to robot arm...")
-                                            from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
-                                            if to_occupant is not None:
-                                                capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                                                capture_count += 1
-                                            else:
-                                                move_piece(from_occupant, from_square, to_square, zed)
+                                            move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
                                             chess_board.push_uci(move_string)
                                             _chess_board_ref[0] = chess_board
                                             turn = chess.WHITE
@@ -418,16 +449,7 @@ def main():
                                 if turn == chess.BLACK:
                                     try:
                                         robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                        move_string = robot_move.uci()
-                                        print(f"Sending move {move_string} to robot arm...")
-
-                                        from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
-
-                                        if to_occupant is not None:
-                                            capture_count = count_white_captures(chess_board)
-                                            capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                                        else:
-                                            move_piece(from_occupant, from_square, to_square, zed)
+                                        move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
 
                                         # Commit robot's move to the board and flip turn back to white
                                         chess_board.push_uci(move_string)

@@ -461,7 +461,11 @@ def show_preview(
 
 
 def move_to_pose(
-    arm: XArmAPI, t_robot_target: np.ndarray, z_offset_m: float, descend_speed: int
+    arm: XArmAPI,
+    t_robot_target: np.ndarray,
+    z_offset_m: float,
+    descend_speed: int,
+    piece_name: Optional[str] = None,
 ) -> Tuple[float, float, float, float]:
     """Travel at ``SAFE_Z``, descend to target Z + offset, return mm coords and yaw for lift."""
     xyz = t_robot_target[:3, 3]
@@ -473,6 +477,8 @@ def move_to_pose(
         target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    if piece_name == "knight":
+        yaw_deg += 90.0
     if not np.isfinite([x_mm, y_mm, safe_z_mm, target_z_mm, yaw_deg]).all():
         raise RuntimeError(
             f"[pickup] Non-finite pose for move_to_pose: "
@@ -490,12 +496,12 @@ def move_to_pose(
     return x_mm, y_mm, lift_z_mm, yaw_deg
 
 
-def pickup_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
+def pickup_pose(arm: XArmAPI, t_robot_target: np.ndarray, piece_name: Optional[str] = None) -> None:
     """Open gripper, descend to grasp height, close, lift slightly."""
     arm.open_lite6_gripper()
     time.sleep(GRIPPER_SETTLE_AFTER_OPEN_S)
     x_mm, y_mm, lift_z_mm, yaw_deg = move_to_pose(
-        arm, t_robot_target, GRASP_Z_OFFSET, ARM_SPEED_DESCEND_MM_S
+        arm, t_robot_target, GRASP_Z_OFFSET, ARM_SPEED_DESCEND_MM_S, piece_name=piece_name
     )
     time.sleep(GRASP_DWELL_BEFORE_CLOSE_S)
     arm.close_lite6_gripper()
@@ -506,10 +512,10 @@ def pickup_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     )
 
 
-def place_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
+def place_pose(arm: XArmAPI, t_robot_target: np.ndarray, piece_name: Optional[str] = None) -> None:
     """Descend to place height, open gripper, retract to safe Z."""
     x_mm, y_mm, lift_z_mm, yaw_deg = move_to_pose(
-        arm, t_robot_target, PLACE_Z_OFFSET, ARM_SPEED_DESCEND_MM_S
+        arm, t_robot_target, PLACE_Z_OFFSET, ARM_SPEED_DESCEND_MM_S, piece_name=piece_name
     )
     arm.open_lite6_gripper()
     time.sleep(GRIPPER_SETTLE_AFTER_RELEASE_S)
@@ -677,8 +683,8 @@ def move_piece(
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
-        pickup_pose(arm, from_pose)
-        place_pose(arm, to_pose)
+        pickup_pose(arm, from_pose, piece_name=piece_name)
+        place_pose(arm, to_pose, piece_name=piece_name)
         # Park away from board after a successful move.
         hover_pose(arm, graveyard_hover_pose)
     finally:
@@ -802,13 +808,13 @@ def capture_piece(
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
-        pickup_pose(arm, captured_from_pose)
+        pickup_pose(arm, captured_from_pose, piece_name=captured_piece_name)
         hover_pose(arm, graveyard_hover_pose)
-        place_pose(arm, graveyard_pose)
+        place_pose(arm, graveyard_pose, piece_name=captured_piece_name)
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
-        pickup_pose(arm, capturing_from_pose)
-        place_pose(arm, capturing_to_pose)
+        pickup_pose(arm, capturing_from_pose, piece_name=capturing_piece_name)
+        place_pose(arm, capturing_to_pose, piece_name=capturing_piece_name)
         # Park away from board after a successful capture sequence.
         hover_pose(arm, graveyard_hover_pose)
 
