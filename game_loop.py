@@ -64,6 +64,15 @@ def detect_starting_fen(board_state):
 
     return None
 
+def count_white_captures(chess_board):
+    """
+    Returns how many white pieces have been captured.
+    Assumes standard starting count (16 pieces) and ignores promotions.
+    """
+    white_pieces_on_board = sum(1 for piece in chess_board.piece_map().values() if piece.color == chess.WHITE)
+    
+    return 16 - white_pieces_on_board
+
 
 def describe_move(chess_board, removals, additions):
     """
@@ -170,7 +179,6 @@ def main():
     camera_intrinsic = zed.camera_intrinsic
 
     prior_board_state = None
-    capture_count = 0
 
     # --- Saved game check ---
     chess_board, resumed = prompt_continue_saved_game()
@@ -278,8 +286,8 @@ def main():
                                         from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
 
                                         if to_occupant is not None:
+                                            capture_count = count_white_captures(chess_board)
                                             capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                                            capture_count += 1
                                         else:
                                             move_piece(from_occupant, from_square, to_square, zed)
 
