@@ -66,7 +66,7 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
-SECOND_ROW_STAGE_ROW = 1
+FORWARD_ENTRY_BOARD_FRACTION = 0.125
 GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
@@ -525,21 +525,39 @@ def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     )
 
 
-def build_stage_pose_for_col(
+def build_forward_entry_pose(
     robot_frame_centers: Dict[int, List[float]],
-    t_robot_board: np.ndarray,
-    col: int,
-    piece_name: str,
+    graveyard_pose: np.ndarray,
 ) -> np.ndarray:
-    """Build a safe travel waypoint on board row 1 at the destination column."""
-    clamped_col = max(0, min(7, int(col)))
-    return square_to_robot_pose(
-        robot_frame_centers,
-        SECOND_ROW_STAGE_ROW,
-        clamped_col,
-        t_robot_board,
-        piece_name=piece_name,
+    """
+    Build a forward staging waypoint from graveyard toward board center.
+
+    This moves in robot-base XY directly away from the arm base by ~1/8 board depth,
+    then keeps SAFE_Z via ``hover_pose`` before heading to board squares.
+    """
+    board_center_xy = np.mean(
+        np.array([robot_frame_centers[27][:2], robot_frame_centers[36][:2]], dtype=np.float64),
+        axis=0,
     )
+    board_depth_m = float(
+        np.linalg.norm(
+            np.array(robot_frame_centers[3][:2], dtype=np.float64)
+            - np.array(robot_frame_centers[59][:2], dtype=np.float64)
+        )
+    )
+    step_m = board_depth_m * FORWARD_ENTRY_BOARD_FRACTION
+
+    forward_dir = board_center_xy.copy()
+    norm = float(np.linalg.norm(forward_dir))
+    if norm < 1e-6:
+        forward_dir = np.array([1.0, 0.0], dtype=np.float64)
+    else:
+        forward_dir /= norm
+
+    entry_pose = graveyard_pose.copy()
+    entry_pose[0, 3] += float(forward_dir[0] * step_m)
+    entry_pose[1, 3] += float(forward_dir[1] * step_m)
+    return entry_pose
 
 
 # =============================================================================
@@ -610,13 +628,10 @@ def move_piece(
         to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=piece_name
         )
-        from_stage_pose = build_stage_pose_for_col(
-            vision.robot_frame_centers, t_rb, from_col, piece_name
-        )
-        to_stage_pose = build_stage_pose_for_col(
-            vision.robot_frame_centers, t_rb, to_col, piece_name
-        )
         graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
+        forward_entry_pose = build_forward_entry_pose(
+            vision.robot_frame_centers, graveyard_hover_pose
+        )
 
         dz = piece_grasp_vertical_offset_m(piece_name)
         print(f"Moving {piece_name} {from_square} → {to_square} (grasp +Z offset {dz * 1000:.2f} mm)")
@@ -639,11 +654,10 @@ def move_piece(
         arm.set_mode(0)
         arm.set_state(0)
         hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, from_stage_pose)
+        hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, from_pose)
-        hover_pose(arm, to_stage_pose)
         place_pose(arm, to_pose)
     finally:
         if arm is not None:
@@ -730,11 +744,11 @@ def capture_piece(
         captured_from_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=captured_piece_name
         )
-        captured_from_stage_pose = build_stage_pose_for_col(
-            vision.robot_frame_centers, t_rb, to_col, captured_piece_name
-        )
         graveyard_hover_pose = build_graveyard_pose(
             vision.robot_frame_centers, t_rb, captured_piece_name
+        )
+        forward_entry_pose = build_forward_entry_pose(
+            vision.robot_frame_centers, graveyard_hover_pose
         )
         graveyard_pose = square_to_robot_pose(
             vision.robot_frame_centers, 0, 7, t_rb, piece_name=captured_piece_name
@@ -749,12 +763,6 @@ def capture_piece(
         capturing_to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=capturing_piece_name
         )
-        capturing_from_stage_pose = build_stage_pose_for_col(
-            vision.robot_frame_centers, t_rb, from_col, capturing_piece_name
-        )
-        capturing_to_stage_pose = build_stage_pose_for_col(
-            vision.robot_frame_centers, t_rb, to_col, capturing_piece_name
-        )
 
         if not execute:
             print("Cancelled (preview: press 'k' to run).")
@@ -768,7 +776,7 @@ def capture_piece(
         arm.set_mode(0)
         arm.set_state(0)
         hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, captured_from_stage_pose)
+        hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, captured_from_pose)
@@ -776,9 +784,8 @@ def capture_piece(
         place_pose(arm, graveyard_pose)
         hover_pose(arm, graveyard_hover_pose)
         print(" executing second one now")
-        hover_pose(arm, capturing_from_stage_pose)
+        hover_pose(arm, forward_entry_pose)
         pickup_pose(arm, capturing_from_pose)
-        hover_pose(arm, capturing_to_stage_pose)
         place_pose(arm, capturing_to_pose)
 
     finally:
