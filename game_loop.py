@@ -247,9 +247,20 @@ def main():
                                     _chess_board_ref[0] = chess_board
                                     turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
                                     prior_board_state = board_state
+                                except Exception as e:
+                                    print(f"  ILLEGAL MOVE ({e}): please return pieces to original squares.")
+                                    all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
+                                    for rc, color_val in all_removals:
+                                        sq = row_col_to_chess_square(*rc)
+                                        piece = chess_board.piece_at(sq)
+                                        color_name = "white" if color_val == 2 else "black"
+                                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
+                                        print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
+                                    continue
 
-                                    # After a successful white move, it is now black's turn
-                                    if turn == chess.BLACK:
+                                # After a successful white move, it is now black's turn — robot moves
+                                if turn == chess.BLACK:
+                                    try:
                                         robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
                                         move_string = robot_move.uci()
                                         print(f"Sending move {move_string} to robot arm...")
@@ -262,14 +273,13 @@ def main():
                                         else:
                                             move_piece(from_occupant, from_square, to_square, zed)
 
-                                except Exception:
-                                    all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
-                                    for rc, color_val in all_removals:
-                                        sq = row_col_to_chess_square(*rc)
-                                        piece = chess_board.piece_at(sq)
-                                        color_name = "white" if color_val == 2 else "black"
-                                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
-                                        print(f"  ILLEGAL MOVE: return {color_name} {piece_name} to {chess.square_name(sq)}")
+                                        # Commit robot's move to the board and flip turn back to white
+                                        chess_board.push_uci(move_string)
+                                        _chess_board_ref[0] = chess_board
+                                        turn = chess.WHITE
+                                        print(f"Robot played {move_string}. White's turn.")
+                                    except Exception as e:
+                                        print(f"  Robot move failed: {e}")
                     else:
                         print("No change detected.")
                 else:
