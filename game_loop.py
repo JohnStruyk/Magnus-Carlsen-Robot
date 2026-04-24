@@ -262,6 +262,24 @@ def main():
     _chess_board_ref[0] = chess_board  # keep signal handler in sync
 
     try:
+        # If we resumed mid-game and it's black's turn, robot moves immediately
+        if resumed and turn == chess.BLACK:
+            try:
+                robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+                move_string = robot_move.uci()
+                print(f"Resuming: it is black's turn. Sending move {move_string} to robot arm...")
+                from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+                if to_occupant is not None:
+                    capture_count = count_white_captures(chess_board)
+                    capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+                else:
+                    move_piece(from_occupant, from_square, to_square, zed)
+                chess_board.push_uci(move_string)
+                _chess_board_ref[0] = chess_board
+                turn = chess.WHITE
+                print(f"Robot played {move_string}. White's turn.")
+            except Exception as e:
+                print(f"  Robot move on resume failed: {e}")
         for i in range(40):
             print(f"\n--- Iteration {i + 1}/40 ---")
             loop_start = time.time()
