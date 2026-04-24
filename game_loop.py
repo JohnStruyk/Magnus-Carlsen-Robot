@@ -3,6 +3,7 @@ import time
 import signal
 import sys
 import os
+import faulthandler
 import numpy as np
 import chess
 import chess.svg
@@ -163,6 +164,7 @@ signal.signal(signal.SIGTERM, _exit_handler)
 
 
 def main():
+    faulthandler.enable(all_threads=True)
     zed = ZedCamera()
     detector = Detector(families='tag36h11 tag25h9')
     camera_intrinsic = zed.camera_intrinsic

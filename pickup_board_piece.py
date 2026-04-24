@@ -66,7 +66,8 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
-FORWARD_ENTRY_BOARD_FRACTION = 0.5
+FORWARD_ENTRY_BOARD_FRACTION = 0.25
+MAX_FORWARD_ENTRY_STEP_M = 0.12
 GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
@@ -290,29 +291,62 @@ def build_vision_from_piece_continuity(
         return None
     print(f"[pickup] {split_msg}")
 
+    print("[pickup] vision step: board config")
     board_cfg = _board_config_for_pickup()
+    if not np.isfinite(camera_intrinsic).all():
+        raise RuntimeError("[pickup] camera_intrinsic has non-finite values.")
+
+    print("[pickup] vision step: solve playmat transform")
     t_cam_robot = get_transform_camera_robot_from_tags(playmat_tags, camera_intrinsic)
     if t_cam_robot is None:
         return None
+    if not np.isfinite(t_cam_robot).all():
+        raise RuntimeError("[pickup] t_cam_robot has non-finite values.")
 
+    print("[pickup] vision step: solve board transform")
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
         board_tags, board_cfg, camera_intrinsic, strict=True
     )
     if t_board_to_cam is None:
         print("[pickup] Board PnP failed (need 4 board corners visible).")
         return None
+    if not np.isfinite(t_board_to_cam).all():
+        raise RuntimeError("[pickup] t_board_to_cam has non-finite values.")
+    if not np.isfinite(b_rvec).all() or not np.isfinite(b_tvec).all():
+        raise RuntimeError("[pickup] board rvec/tvec has non-finite values.")
 
+    print("[pickup] vision step: compose robot-board transform")
     t_robot_cam = np.linalg.inv(t_cam_robot)
     t_robot_board = t_robot_cam @ t_board_to_cam
+    if not np.isfinite(t_robot_board).all():
+        raise RuntimeError("[pickup] t_robot_board has non-finite values.")
 
     square_px = 100
+    print("[pickup] vision step: warp board")
     warped, _, H_img_to_warp = get_warped(img, b_rvec, b_tvec, camera_intrinsic, square_px=square_px)
+    if warped is None or H_img_to_warp is None:
+        raise RuntimeError("[pickup] get_warped returned None.")
+    if not np.isfinite(H_img_to_warp).all():
+        raise RuntimeError("[pickup] H_img_to_warp has non-finite values.")
     H_warp_to_img = np.linalg.inv(H_img_to_warp)
+    if not np.isfinite(H_warp_to_img).all():
+        raise RuntimeError("[pickup] H_warp_to_img has non-finite values.")
 
+    print("[pickup] vision step: compute robot-frame centers")
     centers = compute_robot_frame_centers(
         board_cfg, square_px, H_warp_to_img, camera_intrinsic, t_board_to_cam, t_robot_cam
     )
+    if len(centers) != 64:
+        raise RuntimeError(f"[pickup] Expected 64 board centers, got {len(centers)}.")
+    if not np.isfinite(np.array(list(centers.values()), dtype=np.float64)).all():
+        raise RuntimeError("[pickup] robot_frame_centers contains non-finite values.")
+
+    print("[pickup] vision step: detect board occupancy")
     board_state = detect_pieces(warped, square_px=square_px)
+    if board_state is None:
+        raise RuntimeError("[pickup] detect_pieces returned None.")
+    if not np.isfinite(board_state).all():
+        raise RuntimeError("[pickup] board_state has non-finite values.")
 
     return PickVision(
         warped=warped,
@@ -456,6 +490,11 @@ def move_to_pose(
         target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    if not np.isfinite([x_mm, y_mm, safe_z_mm, target_z_mm, yaw_deg]).all():
+        raise RuntimeError(
+            f"[pickup] Non-finite pose for move_to_pose: "
+            f"x={x_mm}, y={y_mm}, safe_z={safe_z_mm}, target_z={target_z_mm}, yaw={yaw_deg}"
+        )
 
     arm.set_position(
         x_mm, y_mm, safe_z_mm, TOOL_ROLL_DEG, TOOL_PITCH_DEG, yaw_deg,
@@ -519,6 +558,11 @@ def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     x_mm, y_mm, _ = (xyz * 1000.0).tolist()
     safe_z_mm = max(SAFE_Z * 1000.0, MIN_TOOL_Z_M * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    if not np.isfinite([x_mm, y_mm, safe_z_mm, yaw_deg]).all():
+        raise RuntimeError(
+            f"[pickup] Non-finite pose for hover_pose: "
+            f"x={x_mm}, y={y_mm}, z={safe_z_mm}, yaw={yaw_deg}"
+        )
     arm.set_position(
         x_mm, y_mm, safe_z_mm, TOOL_ROLL_DEG, TOOL_PITCH_DEG, yaw_deg,
         speed=ARM_SPEED_TRAVEL_MM_S, is_radian=False, wait=True,
@@ -545,7 +589,9 @@ def build_forward_entry_pose(
             - np.array(robot_frame_centers[59][:2], dtype=np.float64)
         )
     )
-    step_m = board_depth_m * FORWARD_ENTRY_BOARD_FRACTION
+    if not np.isfinite(board_depth_m) or board_depth_m <= 0.0:
+        board_depth_m = 0.4
+    step_m = min(board_depth_m * FORWARD_ENTRY_BOARD_FRACTION, MAX_FORWARD_ENTRY_STEP_M)
 
     forward_dir = board_center_xy.copy()
     norm = float(np.linalg.norm(forward_dir))
@@ -555,8 +601,12 @@ def build_forward_entry_pose(
         forward_dir /= norm
 
     entry_pose = graveyard_pose.copy()
+    if not np.isfinite(entry_pose[:3, 3]).all():
+        return graveyard_pose.copy()
     entry_pose[0, 3] += float(forward_dir[0] * step_m)
     entry_pose[1, 3] += float(forward_dir[1] * step_m)
+    if not np.isfinite(entry_pose[:3, 3]).all():
+        return graveyard_pose.copy()
     return entry_pose
 
 
@@ -580,6 +630,7 @@ def move_piece(
 
     arm: Optional[XArmAPI] = None
     graveyard_hover_pose: Optional[np.ndarray] = None
+    arm_connected = False
     try:
         print("[pickup] Capturing camera image...")
         img = zed.image
@@ -649,6 +700,7 @@ def move_piece(
         print("[pickup] Connecting to arm...")
         arm = XArmAPI(robot_ip)
         arm.connect()
+        arm_connected = True
         arm.motion_enable(enable=True)
         arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
         arm.set_mode(0)
@@ -661,11 +713,16 @@ def move_piece(
         place_pose(arm, to_pose)
     finally:
         if arm is not None:
-            arm.stop_lite6_gripper()
-            if graveyard_hover_pose is not None:
-                hover_pose(arm, graveyard_hover_pose)
-            time.sleep(0.5)
-            arm.disconnect()
+            try:
+                arm.stop_lite6_gripper()
+            except Exception as exc:
+                print(f"[pickup] Ignoring arm cleanup error in stop_lite6_gripper: {exc}")
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    arm.disconnect()
+                except Exception as exc:
+                    print(f"[pickup] Ignoring arm cleanup error in disconnect: {exc}")
         cv2.destroyAllWindows()
 
 
@@ -699,6 +756,7 @@ def capture_piece(
     arm: Optional[XArmAPI] = None
     graveyard_pose: Optional[np.ndarray] = None
     graveyard_hover_pose: Optional[np.ndarray] = None
+    arm_connected = False
     try:
         print("[pickup] Capturing camera image...")
         img = zed.image
@@ -771,6 +829,7 @@ def capture_piece(
         print("[pickup] Connecting to arm...")
         arm = XArmAPI(robot_ip)
         arm.connect()
+        arm_connected = True
         arm.motion_enable(enable=True)
         arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
         arm.set_mode(0)
@@ -790,11 +849,16 @@ def capture_piece(
 
     finally:
         if arm is not None:
-            arm.stop_lite6_gripper()
-            if graveyard_hover_pose is not None:
-                hover_pose(arm, graveyard_hover_pose)
-            time.sleep(0.5)
-            arm.disconnect()
+            try:
+                arm.stop_lite6_gripper()
+            except Exception as exc:
+                print(f"[pickup] Ignoring arm cleanup error in stop_lite6_gripper: {exc}")
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    arm.disconnect()
+                except Exception as exc:
+                    print(f"[pickup] Ignoring arm cleanup error in disconnect: {exc}")
         cv2.destroyAllWindows()
 
 
