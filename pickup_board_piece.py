@@ -282,14 +282,9 @@ def build_vision_from_piece_continuity(
         f"chess {CHESSBOARD_TAG_FAMILY} n={len(chess_raw)} (ok 4 corners: {ch_ok})"
     )
     if not pm_ok:
-        print(f"[pickup] Need four playmat tags ids 0-3 in {PLAYMAT_TAG_FAMILY}. {split_msg}")
-        print(f"[pickup] Raw playmat ids: {sorted(set(int(t.tag_id) for t in playmat_raw))}")
         return None
     if not ch_ok:
-        print(f"[pickup] Need four chessboard tags ids 0-3 in {CHESSBOARD_TAG_FAMILY}. {split_msg}")
-        print(f"[pickup] Raw chess ids: {sorted(set(int(t.tag_id) for t in chess_raw))}")
         return None
-    print(f"[pickup] {split_msg}")
 
     board_cfg = _board_config_for_pickup()
     if not np.isfinite(camera_intrinsic).all():
@@ -305,7 +300,6 @@ def build_vision_from_piece_continuity(
         board_tags, board_cfg, camera_intrinsic, strict=True
     )
     if t_board_to_cam is None:
-        print("[pickup] Board PnP failed (need 4 board corners visible).")
         return None
     if not np.isfinite(t_board_to_cam).all():
         raise RuntimeError("[pickup] t_board_to_cam has non-finite values.")
@@ -476,10 +470,6 @@ def move_to_pose(
     target_z_mm = z_mm + z_offset_m * 1000.0
     z_floor_mm = MIN_TOOL_Z_M * 1000.0
     if target_z_mm < z_floor_mm:
-        print(
-            f"[pickup] Z clamp: requested descend {target_z_mm:.1f} mm → floor {z_floor_mm:.1f} mm "
-            f"(set MIN_TOOL_Z_M if grasps are too high or still too low)."
-        )
         target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
@@ -625,12 +615,10 @@ def move_piece(
     graveyard_hover_pose: Optional[np.ndarray] = None
     arm_connected = False
     try:
-        print("[pickup] Capturing camera image...")
         img = zed.image
         if img is None:
             raise RuntimeError("No image from ZED.")
 
-        print("[pickup] Running vision (playmat + chessboard tags)...")
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
@@ -641,7 +629,6 @@ def move_piece(
 
         execute = True
         if preview:
-            print("[pickup] Preview: press 'k' to execute, any other key to cancel.")
             execute = show_preview(
                 img,
                 vision.warped,
@@ -677,20 +664,9 @@ def move_piece(
             vision.robot_frame_centers, graveyard_hover_pose
         )
 
-        dz = piece_grasp_vertical_offset_m(piece_name)
-        print(f"Moving {piece_name} {from_square} → {to_square} (grasp +Z offset {dz * 1000:.2f} mm)")
-        print(
-            f"[pickup] Indices row*8+col: FROM ({from_row},{from_col})={from_row * 8 + from_col}, "
-            f"TO ({to_row},{to_col})={to_row * 8 + to_col}"
-        )
-        print(f"From xyz (m): {from_pose[:3, 3].tolist()}")
-        print(f"To xyz (m): {to_pose[:3, 3].tolist()}")
-
         if not execute:
-            print("Cancelled (preview: press 'k' to run).")
             return
 
-        print("[pickup] Connecting to arm...")
         arm = XArmAPI(robot_ip)
         arm.connect()
         arm_connected = True
@@ -701,7 +677,6 @@ def move_piece(
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
-        print("[pickup] Executing pick / place...")
         pickup_pose(arm, from_pose)
         place_pose(arm, to_pose)
         # Park away from board after a successful move.
@@ -753,12 +728,10 @@ def capture_piece(
     graveyard_hover_pose: Optional[np.ndarray] = None
     arm_connected = False
     try:
-        print("[pickup] Capturing camera image...")
         img = zed.image
         if img is None:
             raise RuntimeError("No image from ZED.")
 
-        print("[pickup] Running vision (playmat + chessboard tags)...")
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
@@ -769,7 +742,6 @@ def capture_piece(
 
         execute = True
         if preview:
-            print("[pickup] Preview: press 'k' to execute, any other key to cancel.")
             execute = show_preview(
                 img,
                 vision.warped,
@@ -818,10 +790,8 @@ def capture_piece(
         )
 
         if not execute:
-            print("Cancelled (preview: press 'k' to run).")
             return
 
-        print("[pickup] Connecting to arm...")
         arm = XArmAPI(robot_ip)
         arm.connect()
         arm_connected = True
@@ -832,12 +802,10 @@ def capture_piece(
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
         time.sleep(0.5)
-        print("[pickup] Executing pick / place...")
         pickup_pose(arm, captured_from_pose)
         hover_pose(arm, graveyard_hover_pose)
         place_pose(arm, graveyard_pose)
         hover_pose(arm, graveyard_hover_pose)
-        print(" executing second one now")
         hover_pose(arm, forward_entry_pose)
         pickup_pose(arm, capturing_from_pose)
         place_pose(arm, capturing_to_pose)
