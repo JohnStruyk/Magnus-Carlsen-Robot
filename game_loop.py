@@ -284,6 +284,15 @@ def main():
                                         chess_board.push_uci(move_string)
                                         _chess_board_ref[0] = chess_board
                                         turn = chess.WHITE
+                                        # Refresh baseline from a post-robot frame so the next loop
+                                        # does not re-detect the robot's own move as a new change.
+                                        post_robot_image = zed.image
+                                        post_robot_state, _, _ = get_board_state(post_robot_image, detector, camera_intrinsic)
+                                        if post_robot_state is not None:
+                                            prior_board_state = post_robot_state
+                                        else:
+                                            # Force re-baseline on next good frame if immediate capture fails.
+                                            prior_board_state = None
                                         print(f"Robot played {move_string}. White's turn.")
                                     except Exception as e:
                                         print(f"  Robot move failed: {e}")
