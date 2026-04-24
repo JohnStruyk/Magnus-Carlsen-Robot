@@ -66,7 +66,7 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
-FORWARD_ENTRY_BOARD_FRACTION = 0.5
+FORWARD_ENTRY_BOARD_FRACTION = 0.65
 MAX_FORWARD_ENTRY_STEP_M = 0.12
 GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
@@ -685,7 +685,8 @@ def move_piece(
         time.sleep(0.5)
         pickup_pose(arm, from_pose, piece_name=piece_name)
         place_pose(arm, to_pose, piece_name=piece_name)
-        # Park away from board after a successful move.
+        # Exit via forward entry, then park away from board.
+        hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
     finally:
         if arm is not None:
@@ -864,11 +865,12 @@ def capture_piece(
         pickup_pose(arm, captured_from_pose, piece_name=captured_piece_name)
         hover_pose(arm, graveyard_hover_pose)
         place_pose(arm, graveyard_pose, piece_name=captured_piece_name)
+        hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
         hover_pose(arm, forward_entry_pose)
         pickup_pose(arm, capturing_from_pose, piece_name=capturing_piece_name)
         place_pose(arm, capturing_to_pose, piece_name=capturing_piece_name)
-        # Park away from board after a successful capture sequence.
+        hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
 
     finally:
