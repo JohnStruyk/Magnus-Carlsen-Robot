@@ -66,6 +66,7 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
+SECOND_ROW_STAGE_ROW = 1
 GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
@@ -524,6 +525,23 @@ def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     )
 
 
+def build_stage_pose_for_col(
+    robot_frame_centers: Dict[int, List[float]],
+    t_robot_board: np.ndarray,
+    col: int,
+    piece_name: str,
+) -> np.ndarray:
+    """Build a safe travel waypoint on board row 1 at the destination column."""
+    clamped_col = max(0, min(7, int(col)))
+    return square_to_robot_pose(
+        robot_frame_centers,
+        SECOND_ROW_STAGE_ROW,
+        clamped_col,
+        t_robot_board,
+        piece_name=piece_name,
+    )
+
+
 # =============================================================================
 # End-to-end pick / place
 # =============================================================================
@@ -592,6 +610,12 @@ def move_piece(
         to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=piece_name
         )
+        from_stage_pose = build_stage_pose_for_col(
+            vision.robot_frame_centers, t_rb, from_col, piece_name
+        )
+        to_stage_pose = build_stage_pose_for_col(
+            vision.robot_frame_centers, t_rb, to_col, piece_name
+        )
         graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
 
         dz = piece_grasp_vertical_offset_m(piece_name)
@@ -615,9 +639,11 @@ def move_piece(
         arm.set_mode(0)
         arm.set_state(0)
         hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, from_stage_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, from_pose)
+        hover_pose(arm, to_stage_pose)
         place_pose(arm, to_pose)
     finally:
         if arm is not None:
@@ -704,6 +730,9 @@ def capture_piece(
         captured_from_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=captured_piece_name
         )
+        captured_from_stage_pose = build_stage_pose_for_col(
+            vision.robot_frame_centers, t_rb, to_col, captured_piece_name
+        )
         graveyard_hover_pose = build_graveyard_pose(
             vision.robot_frame_centers, t_rb, captured_piece_name
         )
@@ -720,6 +749,12 @@ def capture_piece(
         capturing_to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=capturing_piece_name
         )
+        capturing_from_stage_pose = build_stage_pose_for_col(
+            vision.robot_frame_centers, t_rb, from_col, capturing_piece_name
+        )
+        capturing_to_stage_pose = build_stage_pose_for_col(
+            vision.robot_frame_centers, t_rb, to_col, capturing_piece_name
+        )
 
         if not execute:
             print("Cancelled (preview: press 'k' to run).")
@@ -733,13 +768,17 @@ def capture_piece(
         arm.set_mode(0)
         arm.set_state(0)
         hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, captured_from_stage_pose)
         time.sleep(0.5)
         print("[pickup] Executing pick / place...")
         pickup_pose(arm, captured_from_pose)
+        hover_pose(arm, graveyard_hover_pose)
         place_pose(arm, graveyard_pose)
         hover_pose(arm, graveyard_hover_pose)
         print(" executing second one now")
+        hover_pose(arm, capturing_from_stage_pose)
         pickup_pose(arm, capturing_from_pose)
+        hover_pose(arm, capturing_to_stage_pose)
         place_pose(arm, capturing_to_pose)
 
     finally:
