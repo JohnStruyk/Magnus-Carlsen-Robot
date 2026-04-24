@@ -189,14 +189,11 @@ def main():
 
                                 # After a successful white move, it is now black's turn
                                 if turn == chess.BLACK:
-                                    # TODO: Insert robot manipulation logic here.
                                     # The robot should calculate and execute black's move physically on the board.
                                     robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
 
                                     move_string = robot_move.uci() 
                                     print(f"Sending move {move_string} to robot arm...")
-
-                                    # TODO: Map move string to robot commands,update chess_board once move is executed
 
                                     from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
                                     
@@ -207,9 +204,9 @@ def main():
                                         move_piece(from_occupant, from_square, to_square, zed)
 
                                     # For now, display the board and wait for a human to move black's piece manually.
-                                    print("Black's turn. Move black's piece, then press any key to continue.")
-                                    display_board_state(warped_with_pieces, resized_raw)
-                                    cv2.destroyAllWindows()
+                                    # print("Black's turn. Move black's piece, then press any key to continue.")
+                                    # display_board_state(warped_with_pieces, resized_raw)
+                                    # cv2.destroyAllWindows()
                             except Exception:
                                 all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                                 for rc, color_val in all_removals:

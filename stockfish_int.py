@@ -42,11 +42,11 @@ def visualize_board(board, best_move=None):
     webbrowser.open("file://" + os.path.realpath(output_path))
 
 # Example Usage:
-current_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-best_move = get_best_move(current_fen)
+# current_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+# best_move = get_best_move(current_fen)
 
-print(f"Stockfish recommends: {best_move}")
-# Output will be in UCI format (e.g., 'e2e4')
+# print(f"Stockfish recommends: {best_move}")
+# # Output will be in UCI format (e.g., 'e2e4')
 
-board = chess.Board(current_fen)
-visualize_board(board, best_move)
+# board = chess.Board(current_fen)
+# visualize_board(board, best_move)

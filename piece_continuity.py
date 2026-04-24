@@ -233,8 +233,10 @@ def get_board_state(cv_image, detector, camera_intrinsic):
         p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
-    print(f"Captured {len(tags)} tags.")
-    print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
+    # print(f"Captured {len(tags)} tags.")
+    # print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
+    if len(tags) < 4:
+        print("Vision Error: only captured {len(tags)} tags.")
 
     output_square_px = 100
     warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
