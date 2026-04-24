@@ -66,7 +66,7 @@ GRIPPER_SETTLE_AFTER_OPEN_S = 0.40
 GRIPPER_SETTLE_AFTER_CLOSE_S = 0.55
 GRIPPER_SETTLE_AFTER_RELEASE_S = 0.40
 GRASP_DWELL_BEFORE_CLOSE_S = 0.25
-FORWARD_ENTRY_BOARD_FRACTION = 0.125
+FORWARD_ENTRY_BOARD_FRACTION = 0.5
 GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
@@ -456,6 +456,11 @@ def move_to_pose(
         target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    if not np.isfinite([x_mm, y_mm, safe_z_mm, target_z_mm, yaw_deg]).all():
+        raise RuntimeError(
+            f"[pickup] Non-finite pose for move_to_pose: "
+            f"x={x_mm}, y={y_mm}, safe_z={safe_z_mm}, target_z={target_z_mm}, yaw={yaw_deg}"
+        )
 
     arm.set_position(
         x_mm, y_mm, safe_z_mm, TOOL_ROLL_DEG, TOOL_PITCH_DEG, yaw_deg,
@@ -519,6 +524,11 @@ def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     x_mm, y_mm, _ = (xyz * 1000.0).tolist()
     safe_z_mm = max(SAFE_Z * 1000.0, MIN_TOOL_Z_M * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    if not np.isfinite([x_mm, y_mm, safe_z_mm, yaw_deg]).all():
+        raise RuntimeError(
+            f"[pickup] Non-finite pose for hover_pose: "
+            f"x={x_mm}, y={y_mm}, z={safe_z_mm}, yaw={yaw_deg}"
+        )
     arm.set_position(
         x_mm, y_mm, safe_z_mm, TOOL_ROLL_DEG, TOOL_PITCH_DEG, yaw_deg,
         speed=ARM_SPEED_TRAVEL_MM_S, is_radian=False, wait=True,
@@ -545,6 +555,8 @@ def build_forward_entry_pose(
             - np.array(robot_frame_centers[59][:2], dtype=np.float64)
         )
     )
+    if not np.isfinite(board_depth_m) or board_depth_m <= 0.0:
+        board_depth_m = 0.4
     step_m = board_depth_m * FORWARD_ENTRY_BOARD_FRACTION
 
     forward_dir = board_center_xy.copy()
@@ -555,8 +567,12 @@ def build_forward_entry_pose(
         forward_dir /= norm
 
     entry_pose = graveyard_pose.copy()
+    if not np.isfinite(entry_pose[:3, 3]).all():
+        return graveyard_pose.copy()
     entry_pose[0, 3] += float(forward_dir[0] * step_m)
     entry_pose[1, 3] += float(forward_dir[1] * step_m)
+    if not np.isfinite(entry_pose[:3, 3]).all():
+        return graveyard_pose.copy()
     return entry_pose
 
 
