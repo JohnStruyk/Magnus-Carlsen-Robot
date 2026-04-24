@@ -263,7 +263,7 @@ def main():
                                         color_name = "white" if color_val == 2 else "black"
                                         piece_name = chess.piece_name(piece.piece_type) if piece else "unknown"
                                         print(f"  return {color_name} {piece_name} to {chess.square_name(sq)}")
-                                    continue
+                                    
 
                                 # After a successful white move, it is now black's turn — robot moves
                                 if turn == chess.BLACK:
