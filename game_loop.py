@@ -320,8 +320,8 @@ def main():
                 print(f"Robot played {move_string}. White's turn.")
             except Exception as e:
                 print(f"  Robot move on resume failed: {e}")
-        for i in range(40):
-            print(f"\n--- Iteration {i + 1}/40 ---")
+        for i in range(500):
+            print(f"\n--- Iteration {i + 1}/500 ---")
             loop_start = time.time()
 
             cv_image = zed.image

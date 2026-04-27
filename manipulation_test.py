@@ -9,9 +9,9 @@ from utils.zed_camera import ZedCamera
 from pickup_board_piece import move_piece
 
 # --- CONFIGURE HERE ---
-PIECE_TYPE  = "pawn"   # pawn / knight / bishop / rook / queen / king
-FROM_SQUARE = "e2"     # starting square (algebraic)
-TO_SQUARE   = "e4"     # destination square (algebraic)
+PIECE_TYPE  = "king"   # pawn / knight / bishop / rook / queen / king
+FROM_SQUARE = "e8"     # starting square (algebraic)
+TO_SQUARE   = "g8"     # destination square (algebraic)
 REPETITIONS = 5        # back-and-forth cycles (each cycle = 2 manipulations)
 # ----------------------
 
