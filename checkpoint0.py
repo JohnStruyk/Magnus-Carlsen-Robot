@@ -3,6 +3,9 @@ from pupil_apriltags import Detector
 
 from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
+from xarm.wrapper import XArmAPI
+
+
 
 TAG_SIZE = 0.08
 PREVIEW_MAX_WIDTH = 1280
@@ -332,6 +335,11 @@ def main():
         cv2.destroyAllWindows()
 
     finally:
+        robot_ip = "192.168.1.159"
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm.motion_enable(enable=True)
+        arm.move_gohome(wait=True)
         zed.close()
 
 
