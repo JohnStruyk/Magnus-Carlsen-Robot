@@ -319,6 +319,23 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
     return move_string
 
 
+def execute_robot_move_with_retry(chess_board, robot_move, zed):
+    """
+    Retry robot move when vision transiently reports source square empty.
+    Keeps attempting the same move until the source square is seen populated.
+    """
+    while True:
+        try:
+            return execute_robot_move_on_board(chess_board, robot_move, zed)
+        except RuntimeError as e:
+            msg = str(e)
+            if "appears empty in vision" in msg:
+                print(f"Robot move retry: {msg}")
+                time.sleep(0.5)
+                continue
+            raise
+
+
 def main():
     faulthandler.enable(all_threads=True)
     zed = ZedCamera()
@@ -416,7 +433,7 @@ def main():
                                     if turn == chess.BLACK:
                                         try:
                                             robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                            move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
+                                            move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
                                             chess_board.push_uci(move_string)
                                             _chess_board_ref[0] = chess_board
                                             turn = chess.WHITE
@@ -465,7 +482,7 @@ def main():
                                 if turn == chess.BLACK:
                                     try:
                                         robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                        move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
+                                        move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
 
                                         # Commit robot's move to the board and flip turn back to white
                                         chess_board.push_uci(move_string)
@@ -496,7 +513,7 @@ def main():
                         if resume_robot_pending and turn == chess.BLACK:
                             try:
                                 robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
+                                move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
                                 chess_board.push_uci(move_string)
                                 _chess_board_ref[0] = chess_board
                                 turn = chess.WHITE
