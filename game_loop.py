@@ -306,20 +306,10 @@ def main():
     # --- Saved game check ---
     chess_board, resumed = prompt_continue_saved_game()
     turn = chess_board.turn if resumed else chess.WHITE
+    resume_robot_pending = bool(resumed and turn == chess.BLACK)
     _chess_board_ref[0] = chess_board  # keep signal handler in sync
 
     try:
-        # If we resumed mid-game and it's black's turn, robot moves immediately
-        if resumed and turn == chess.BLACK:
-            try:
-                robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
-                chess_board.push_uci(move_string)
-                _chess_board_ref[0] = chess_board
-                turn = chess.WHITE
-                print(f"Robot played {move_string}. White's turn.")
-            except Exception as e:
-                print(f"  Robot move on resume failed: {e}")
         for i in range(500):
             print(f"\n--- Iteration {i + 1}/500 ---")
             loop_start = time.time()
@@ -451,16 +441,7 @@ def main():
                                 if turn == chess.BLACK:
                                     try:
                                         robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
-                                        move_string = robot_move.uci()
-                                        print(f"Sending move {move_string} to robot arm...")
-
-                                        from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
-
-                                        if to_occupant is not None:
-                                            capture_count = count_white_captures(chess_board)
-                                            capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
-                                        else:
-                                            move_piece(from_occupant, from_square, to_square, zed)
+                                        move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
 
                                         # Commit robot's move to the board and flip turn back to white
                                         chess_board.push_uci(move_string)
@@ -487,9 +468,33 @@ def main():
                                     except Exception as e:
                                         print(f"  Robot move failed: {e}")
                     else:
-                        print("No change detected.")
+                        # Resume recovery
+                        if resume_robot_pending and turn == chess.BLACK:
+                            try:
+                                robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+                                move_string = execute_robot_move_on_board(chess_board, robot_move, zed)
+                                chess_board.push_uci(move_string)
+                                _chess_board_ref[0] = chess_board
+                                turn = chess.WHITE
+                                resume_robot_pending = False
+
+                                post_robot_state = None
+                                while post_robot_state is None:
+                                    post_robot_image = zed.image
+                                    post_robot_state, _, _ = get_board_state(post_robot_image, detector, camera_intrinsic)
+                                    if post_robot_state is None:
+                                        print("Post-robot board capture failed; retrying in 0.5s...")
+                                        time.sleep(0.5)
+                                prior_board_state = post_robot_state
+                                print(f"Robot played {move_string}. White's turn.")
+                            except Exception as e:
+                                print(f"  Robot move on resume failed: {e}")
+                        else:
+                            print("No change detected.")
                 else:
                     prior_board_state = board_state
+                    if resumed and resume_robot_pending:
+                        print("Resume baseline captured. Waiting for stable frame before robot move.")
                     print("No prior state to compare against.")
 
             elapsed = time.time() - loop_start
