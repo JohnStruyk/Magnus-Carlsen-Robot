@@ -41,14 +41,15 @@ TAG_HEIGHT_OFFSET = -20.5
 
 # --- 2. TRANSFORMATION LOGIC ---
 
-def get_4x4_transform(tags, config, camera_intrinsic, strict=True, min_tags=None):
+def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     """Calculates the 4x4 transform matrix from the object to the camera."""
     target_ids = set(int(x) for x in config["tag_ids"])
     found_tags = [t for t in tags if int(t.tag_id) in target_ids]
-
-    if min_tags is None:
-        min_tags = len(target_ids) if strict else 1
-    if len(found_tags) < min_tags:
+    
+    # Logic to specify what should happen if not all the tags are seen, want all 4 for the chessboard part
+    if strict and len(found_tags) < len(target_ids):
+        return None, None, None
+    if not strict and len(found_tags) == 0:
         return None, None, None
 
     world_points = []
@@ -213,18 +214,14 @@ def get_board_state(cv_image, detector, camera_intrinsic):
     tags = detector.detect(gray)
 
     # 1. Camera -> Robot Transform
-    t_robot_to_cam, _, _ = get_4x4_transform(
-        tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False, min_tags=3
-    )
+    t_robot_to_cam, _, _ = get_4x4_transform(tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False)
     if t_robot_to_cam is None:
         print("Robot tags (0-3) not found.")
         return None, None, None
     t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
 
     # 2. Board -> Camera Transform
-    t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-        tags, BOARD_CONFIG, camera_intrinsic, strict=False, min_tags=3
-    )
+    t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
     if t_board_to_cam is None:
         print("Chessboard tags not found.")
         return None, None, cv2.resize(cv_image, (1080, 700))
