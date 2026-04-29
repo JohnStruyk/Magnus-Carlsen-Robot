@@ -514,7 +514,7 @@ def main():
                                         print(f"  Robot move failed: {e}")
                     else:
                         # Resume recovery
-                        if resume_robot_pending and turn == chess.BLACK:
+                        if turn == chess.BLACK:
                             try:
                                 robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
                                 move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
