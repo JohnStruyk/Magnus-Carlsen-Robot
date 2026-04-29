@@ -72,6 +72,13 @@ GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
 
+# Promotion source pose for spare queens in robot base frame.
+# Defaults are from measured basket pose in checkpoint2.py.
+PROMOTION_SOURCE_X_M: Optional[float] = 0.2301
+PROMOTION_SOURCE_Y_M: Optional[float] = -0.3055
+PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
+PROMOTION_SOURCE_YAW_DEG = -32.8
+
 # Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
 PIECE_CONFIG = {
     "king_height": 0.0950214,
@@ -743,6 +750,160 @@ def stage_from_graveyard(
         arm.set_mode(0)
         arm.set_state(0)
         hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
+
+
+def _robot_xyz_pose(
+    x_m: float,
+    y_m: float,
+    z_m: float,
+    yaw_deg: float = 0.0,
+) -> np.ndarray:
+    """Build a robot-base pose from fixed XYZ + yaw."""
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix().astype(np.float32)
+    pose[:3, 3] = np.array([x_m, y_m, z_m], dtype=np.float32)
+    return pose
+
+
+def remove_piece_to_graveyard(
+    piece_type: str,
+    from_square: str,
+    zed: ZedCamera,
+    capture_count: int = 0,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+) -> None:
+    """Pick a piece from board square and place it in graveyard."""
+    piece_name = normalize_piece_type(piece_type)
+    from_row, from_col = algebraic_to_row_col(from_square)
+
+    arm: Optional[XArmAPI] = None
+    arm_connected = False
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
+
+        t_rb = vision.t_robot_board
+        from_pose = square_to_robot_pose(
+            vision.robot_frame_centers, from_row, from_col, t_rb, piece_name=piece_name
+        )
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+        graveyard_pose = square_to_robot_pose(
+            vision.robot_frame_centers, 0, 7, t_rb, piece_name=piece_name
+        )
+        graveyard_pose[0, 3] -= 0.15
+        offset_x, offset_y = capture_offsets(capture_count, 0.05)
+        graveyard_pose[0, 3] += offset_x
+        graveyard_pose[1, 3] += offset_y
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        pickup_pose(arm, from_pose, piece_name=piece_name)
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+        place_pose(arm, graveyard_pose, piece_name=piece_name)
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
+
+
+def place_promotion_queen_from_source(
+    to_square: str,
+    zed: ZedCamera,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+) -> None:
+    """Pick a queen from a fixed promotion source pose and place it on promotion square."""
+    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None or PROMOTION_SOURCE_Z_M is None:
+        raise RuntimeError(
+            "Set PROMOTION_SOURCE_X_M, PROMOTION_SOURCE_Y_M, and PROMOTION_SOURCE_Z_M in pickup_board_piece.py "
+            "before using robot promotions."
+        )
+
+    to_row, to_col = algebraic_to_row_col(to_square)
+    arm: Optional[XArmAPI] = None
+    arm_connected = False
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
+
+        t_rb = vision.t_robot_board
+        queen_to_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
+        )
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+        promotion_source_pose = _robot_xyz_pose(
+            float(PROMOTION_SOURCE_X_M),
+            float(PROMOTION_SOURCE_Y_M),
+            float(PROMOTION_SOURCE_Z_M),
+            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
+        )
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, promotion_source_pose)
+        pickup_pose(arm, promotion_source_pose, piece_name="queen")
+        hover_pose(arm, promotion_source_pose)
+        hover_pose(arm, forward_entry_pose)
+        place_pose(arm, queen_to_pose, piece_name="queen")
         hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
     finally:

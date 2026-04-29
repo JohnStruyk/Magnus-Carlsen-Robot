@@ -14,7 +14,13 @@ from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, display_board_state, compare_board_states
 import chess_utils
 from stockfish_int import get_best_move, visualize_board
-from pickup_board_piece import move_piece, capture_piece, stage_from_graveyard
+from pickup_board_piece import (
+    move_piece,
+    capture_piece,
+    stage_from_graveyard,
+    remove_piece_to_graveyard,
+    place_promotion_queen_from_source,
+)
 
 CAPTURE_INTERVAL = 5  # seconds between captures
 SAVED_GAME_FILE = "stored_game.txt"
@@ -285,12 +291,30 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
         move_piece(rook_piece.symbol(), rook_from, rook_to, zed)
         return move_string
 
-    from_square, to_square, from_occupant, to_occupant = parse_move_string(chess_board, move_string)
+    from_sq = robot_move.from_square
+    to_sq = robot_move.to_square
+    from_piece = chess_board.piece_at(from_sq)
+    to_piece = chess_board.piece_at(to_sq)
+    if from_piece is None:
+        raise RuntimeError("Robot move failed: source square has no piece.")
+
+    from_square = chess.square_name(from_sq)
+    to_square = chess.square_name(to_sq)
+    from_occupant = from_piece.symbol()
+    to_occupant = to_piece.symbol() if to_piece is not None else None
+
     if to_occupant is not None:
         capture_count = count_white_captures(chess_board)
         capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
     else:
         move_piece(from_occupant, from_square, to_square, zed)
+
+    if robot_move.promotion is not None:
+        # Replace promoted pawn with a queen from cup:
+        # 1) remove pawn from promotion square to graveyard
+        # 2) pick queen from cup and place on promotion square
+        remove_piece_to_graveyard(from_occupant, to_square, zed, capture_count=0)
+        place_promotion_queen_from_source(to_square, zed)
 
     return move_string
 
