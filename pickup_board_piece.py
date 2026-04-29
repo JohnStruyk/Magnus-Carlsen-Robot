@@ -59,6 +59,8 @@ PLACE_Z_OFFSET = 0.002
 MIN_TOOL_Z_M = 0.04
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
+# Keep commanded yaw in a conservative range to reduce IK/joint limit faults.
+MAX_ABS_TOOL_YAW_DEG = 120.0
 GRIPPER_LENGTH_M = 0.067
 ARM_SPEED_TRAVEL_MM_S = 80
 ARM_SPEED_DESCEND_MM_S = 30
@@ -486,6 +488,9 @@ def move_to_pose(
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
     if piece_name == "knight":
         yaw_deg += 90.0
+    # Normalize then clamp yaw so wrist joints do not chase extreme rotations.
+    yaw_deg = ((yaw_deg + 180.0) % 360.0) - 180.0
+    yaw_deg = max(-MAX_ABS_TOOL_YAW_DEG, min(MAX_ABS_TOOL_YAW_DEG, yaw_deg))
     if not np.isfinite([x_mm, y_mm, safe_z_mm, target_z_mm, yaw_deg]).all():
         raise RuntimeError(
             f"[pickup] Non-finite pose for move_to_pose: "
@@ -554,6 +559,8 @@ def hover_pose(arm: XArmAPI, t_robot_target: np.ndarray) -> None:
     x_mm, y_mm, _ = (xyz * 1000.0).tolist()
     safe_z_mm = max(SAFE_Z * 1000.0, MIN_TOOL_Z_M * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    yaw_deg = ((yaw_deg + 180.0) % 360.0) - 180.0
+    yaw_deg = max(-MAX_ABS_TOOL_YAW_DEG, min(MAX_ABS_TOOL_YAW_DEG, yaw_deg))
     if not np.isfinite([x_mm, y_mm, safe_z_mm, yaw_deg]).all():
         raise RuntimeError(
             f"[pickup] Non-finite pose for hover_pose: "
