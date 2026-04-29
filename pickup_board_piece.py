@@ -867,8 +867,6 @@ def capture_piece(
         hover_pose(arm, graveyard_hover_pose)
         place_pose(arm, graveyard_pose, piece_name=captured_piece_name)
         hover_pose(arm, forward_entry_pose)
-        hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, forward_entry_pose)
         pickup_pose(arm, capturing_from_pose, piece_name=capturing_piece_name)
         place_pose(arm, capturing_to_pose, piece_name=capturing_piece_name)
         hover_pose(arm, forward_entry_pose)
