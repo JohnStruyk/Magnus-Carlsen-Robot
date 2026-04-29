@@ -127,7 +127,8 @@ def detect_playmat_and_chessboard_tags(image):
 
 def best_tag_per_id_0_3(tags):
     """
-    One detection per id 0–3 (largest polygon if duplicates). Returns (list, ok) with ok True iff len==4.
+    One detection per id 0–3 (largest polygon if duplicates).
+    Returns (list, ok) with ok True iff at least 3 unique ids are present.
     """
     by_id = {}
     for t in tags:
@@ -138,7 +139,7 @@ def best_tag_per_id_0_3(tags):
         if prev is None or _tag_polygon_area_sq_px(t) > _tag_polygon_area_sq_px(prev):
             by_id[tid] = t
     ordered = [by_id[i] for i in (0, 1, 2, 3) if i in by_id]
-    return ordered, len(by_id) == 4
+    return ordered, len(by_id) >= 3
 
 
 def draw_all_tag_overlays(bgr_image, tags):
@@ -241,8 +242,11 @@ def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
 def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     """PnP from playmat tags (ids 0–3); pass one tag per id from best_tag_per_id_0_3."""
     world_points, image_points = get_pnp_pairs(tags)
-    if world_points.shape[0] < 4:
-        print("Insufficient playmat tag corners after filtering (need family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY)
+    if world_points.shape[0] < 12:
+        print(
+            "Insufficient playmat tag corners after filtering "
+            "(need at least 3 tags in family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY
+        )
         return None
     success, rotation_vec, translation = cv2.solvePnP(
         world_points, image_points, camera_intrinsic, None
@@ -265,7 +269,7 @@ def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
         tags, ok = best_tag_per_id_0_3(playmat_raw)
         if not ok:
             print(
-                f"Playmat family {PLAYMAT_TAG_FAMILY}: need four tags with ids 0-3; "
+                f"Playmat family {PLAYMAT_TAG_FAMILY}: need at least 3 tags with ids 0-3; "
                 f"got ids {sorted(set(int(t.tag_id) for t in playmat_raw))} (n={len(playmat_raw)})"
             )
             return None
@@ -274,7 +278,7 @@ def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
         ids = sorted(set(int(t.tag_id) for t in tags))
         print(f"Playmat tag ids: {ids}")
     world_points, image_points = get_pnp_pairs(tags)
-    if world_points.shape[0] < 4:
+    if world_points.shape[0] < 12:
         print(f'Insufficient valid tag corners found.')
         return None
 

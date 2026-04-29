@@ -278,8 +278,8 @@ def build_vision_from_piece_continuity(
     playmat_tags, pm_ok = best_tag_per_id_0_3(playmat_raw)
     board_tags, ch_ok = best_tag_per_id_0_3(chess_raw)
     split_msg = (
-        f"dual-family playmat {PLAYMAT_TAG_FAMILY} n={len(playmat_raw)} (ok 4 corners: {pm_ok}), "
-        f"chess {CHESSBOARD_TAG_FAMILY} n={len(chess_raw)} (ok 4 corners: {ch_ok})"
+        f"dual-family playmat {PLAYMAT_TAG_FAMILY} n={len(playmat_raw)} (ok >=3 tags: {pm_ok}), "
+        f"chess {CHESSBOARD_TAG_FAMILY} n={len(chess_raw)} (ok >=3 tags: {ch_ok})"
     )
     if not pm_ok:
         return None
@@ -297,7 +297,7 @@ def build_vision_from_piece_continuity(
         raise RuntimeError("[pickup] t_cam_robot has non-finite values.")
 
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(
-        board_tags, board_cfg, camera_intrinsic, strict=True
+        board_tags, board_cfg, camera_intrinsic, strict=False, min_tags=3
     )
     if t_board_to_cam is None:
         return None
