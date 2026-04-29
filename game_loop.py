@@ -233,12 +233,13 @@ signal.signal(signal.SIGINT, _exit_handler)
 signal.signal(signal.SIGTERM, _exit_handler)
 
 
-def detect_castling(chess_board, removals):
+def detect_castling(chess_board, removals, additions):
     """
-    Given two removal squares (row, col) for one color, check if any legal castle
-    move matches. Returns the UCI string (e.g. 'e1g1') or None.
+    Given two removal and two addition squares (row, col) for one color, check if
+    any legal castling move matches exactly. Returns UCI string (e.g. 'e1g1') or None.
     """
     removed_squares = {row_col_to_chess_square(r, c) for r, c in [tuple(removals[0]), tuple(removals[1])]}
+    added_squares = {row_col_to_chess_square(r, c) for r, c in [tuple(additions[0]), tuple(additions[1])]}
     for move in chess_board.legal_moves:
         if chess_board.is_castling(move):
             # Castling UCI: king from/to — the rook squares are implied
@@ -247,9 +248,11 @@ def detect_castling(chess_board, removals):
             # The rook's from-square depends on kingside vs queenside
             if chess_board.is_kingside_castling(move):
                 rook_from = chess.H1 if chess_board.turn == chess.WHITE else chess.H8
+                rook_to = chess.F1 if chess_board.turn == chess.WHITE else chess.F8
             else:
                 rook_from = chess.A1 if chess_board.turn == chess.WHITE else chess.A8
-            if removed_squares == {king_from, rook_from}:
+                rook_to = chess.D1 if chess_board.turn == chess.WHITE else chess.D8
+            if removed_squares == {king_from, rook_from} and added_squares == {king_to, rook_to}:
                 return move.uci()
     return None
 
@@ -414,7 +417,8 @@ def main():
                             if is_castle:
                                 castle_color_val = 1 if len(one_removals) == 2 else 2
                                 removals = one_removals if castle_color_val == 1 else two_removals
-                                castle_move = detect_castling(chess_board, removals)
+                                additions = one_additions if castle_color_val == 1 else two_additions
+                                castle_move = detect_castling(chess_board, removals, additions)
                                 if castle_move is None:
                                     print("Looks like castling but no legal castle move found. Please return pieces.")
                                 else:
