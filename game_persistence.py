@@ -12,7 +12,6 @@ from stockfish_int import visualize_board
 
 
 SAVED_GAME_FILE = "stored_game.txt"
-STANDARD_STARTING_FEN = chess.STARTING_FEN
 STANDARD_BOARD_STATE = np.array(
     [
         [1, 1, 1, 1, 1, 1, 1, 1],
@@ -32,7 +31,7 @@ def detect_starting_fen(board_state: np.ndarray, current_fen: str) -> Optional[s
     """Infer initial FEN from vision state; fallback to configured FEN if provided."""
     if np.array_equal(board_state, STANDARD_BOARD_STATE):
         print("Standard starting position detected.")
-        return STANDARD_STARTING_FEN
+        return chess.STARTING_FEN
     if current_fen:
         print("Using CURRENT_FEN.")
         return current_fen

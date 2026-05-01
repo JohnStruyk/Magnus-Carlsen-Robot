@@ -1,10 +1,4 @@
-"""
-Pick and place chess pieces using ZED + dual AprilTag families (playmat / board).
-
-Square targets are derived from the same warped-board homography as ``detect_pieces``:
-warp cell center → raw pixel → camera ray → board plane → robot base. That keeps
-arm XY aligned with the rectified grid even when the analytic tag grid differs slightly.
-"""
+"""ZED + dual AprilTag families: vision → square poses → Lite6 pick/place/capture/promotion."""
 
 from __future__ import annotations
 
@@ -20,6 +14,7 @@ from xarm.wrapper import XArmAPI
 from calibrate_tags import (
     CHESSBOARD_TAG_FAMILY,
     PLAYMAT_TAG_FAMILY,
+    ROBOT_IP_DEFAULT,
     best_tag_per_id_0_3,
     detect_playmat_and_chessboard_tags,
     get_transform_camera_robot_from_tags,
@@ -33,40 +28,28 @@ from piece_continuity import (
 )
 from utils.zed_camera import ZedCamera
 
-# ---------------------------------------------------------------------------
-# Board / calibration (override in module scope if measured values differ)
-# ---------------------------------------------------------------------------
+_VISION_TAG_ERR = (
+    f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+    f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard)."
+)
+
 BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
 HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
-# If True, square centers use tag-chain fallback only (skip homography-ray refinement).
 USE_HARDCODED_SQUARE_CENTERS = False
 
-# ---------------------------------------------------------------------------
-# Robot motion (Lite6 + parallel gripper)
-# ---------------------------------------------------------------------------
-ROBOT_IP_DEFAULT = "192.168.1.159"
 SAFE_Z = 0.14
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
-# Adaptive board-row Z tweak (meters): lower row 1 targets slightly.
 ROW1_Z_ADJUST_M = -0.004
 ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
-# Lateral centering tweak for lower/near rows (meters), blended from start row
-# toward row 7. Positive moves in +board-Y direction, negative in -board-Y.
 LOWER_ROWS_CENTER_SHIFT_M = 0.0
 LOWER_ROWS_START_ROW = 5
-# Linear depth correction along the board X-axis (row direction).
-# Row 0 (nearest base) gets 0 mm, row 7 (furthest) gets the full value.
-ROW_DEPTH_CORRECTION_MAX_M = 0.005  # 5 mm at row 7
-# Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
-# if vision Z is too low. Tune to your setup (measure safe height above the board / table).
+ROW_DEPTH_CORRECTION_MAX_M = 0.005
 MIN_TOOL_Z_M = 0.04
 TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
-# Keep commanded yaw in a conservative range to reduce IK/joint limit faults.
 MAX_ABS_TOOL_YAW_DEG = 120.0
-# Joint unwind settings applied before disconnect.
 JOINT_UNWIND_SPEED_DEG_S = 20
 JOINT_UNWIND_ACCEL_DEG_S2 = 100
 JOINT_RETURN_POSE_DEG = [90.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -83,18 +66,13 @@ GRAVEYARD_ANCHOR_ROW = 0
 GRAVEYARD_ANCHOR_COL = 7
 GRAVEYARD_X_SHIFT_M = -0.15
 
-# Promotion source pose for spare queens in robot base frame.
-# Defaults are from measured basket pose in checkpoint2.py.
 PROMOTION_SOURCE_X_M: Optional[float] = 0.221
 PROMOTION_SOURCE_Y_M: Optional[float] = -0.2942
 PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
 PROMOTION_SOURCE_YAW_DEG = -32.8
-# Absolute descend target at promotion source for queen pickup (robot base Z, meters).
 PROMOTION_SOURCE_GRASP_TARGET_Z_M = 0.075
-# Pawn discard spot: offset from source in +X (meters), ~5 cm toward board.
 PROMOTION_PAWN_DISCARD_X_OFFSET_M = 0.05
 
-# Static robot-base +Z offset (meters) added at pick/place for each piece — edit these only.
 GRASP_Z_OFFSET_PAWN_M = 0.045
 GRASP_Z_OFFSET_KNIGHT_M = 0.05
 GRASP_Z_OFFSET_BISHOP_M = 0.06
@@ -114,16 +92,9 @@ PIECE_GRASP_Z_OFFSET_M = {
 
 @dataclass(frozen=True)
 class PickVision:
-    """Occupancy + square centers + board pose for one grab (warp/tags not retained)."""
-
     board_state: np.ndarray
     robot_frame_centers: Dict[int, List[float]]
     t_robot_board: np.ndarray
-
-
-# =============================================================================
-# Algebraic notation & board config
-# =============================================================================
 
 
 def algebraic_to_row_col(square: str) -> Tuple[int, int]:
@@ -156,11 +127,6 @@ def normalize_piece_type(piece_type: str) -> str:
 def _board_config_for_pickup() -> dict:
     """``piece_continuity.BOARD_CONFIG`` with pickup tag-edge override."""
     return {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
-
-
-# =============================================================================
-# Geometry: warped cell → 3D in robot base
-# =============================================================================
 
 
 def warp_cell_center_to_robot_xyz(
@@ -281,11 +247,6 @@ def square_to_robot_pose(
     return pose
 
 
-# =============================================================================
-# Vision: tags → transforms → warped board → centers + occupancy
-# =============================================================================
-
-
 def build_vision_from_piece_continuity(
     img: np.ndarray, camera_intrinsic: np.ndarray
 ) -> Optional[PickVision]:
@@ -358,11 +319,6 @@ def build_vision_from_piece_continuity(
         robot_frame_centers=centers,
         t_robot_board=t_robot_board,
     )
-
-
-# =============================================================================
-# Arm trajectories
-# =============================================================================
 
 
 def move_to_pose(
@@ -537,11 +493,6 @@ def build_forward_entry_pose(
     return entry_pose
 
 
-# =============================================================================
-# End-to-end pick / place
-# =============================================================================
-
-
 def move_piece(
     piece_type: str,
     from_square: str,
@@ -565,10 +516,7 @@ def move_piece(
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
+            raise RuntimeError(_VISION_TAG_ERR)
 
         if int(vision.board_state[from_row, from_col]) == 0:
             raise RuntimeError(f"Source square {from_square} appears empty in vision.")
@@ -663,10 +611,7 @@ def replace_promoted_pawn_with_source_queen(
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
+            raise RuntimeError(_VISION_TAG_ERR)
 
         t_rb = vision.t_robot_board
         promotion_square_pawn_pose = square_to_robot_pose(
@@ -775,10 +720,7 @@ def capture_piece(
         K = zed.camera_intrinsic
         vision = build_vision_from_piece_continuity(img, K)
         if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
+            raise RuntimeError(_VISION_TAG_ERR)
 
         if int(vision.board_state[from_row, from_col]) == 0:
             raise RuntimeError(f"Source square {from_square} appears empty in vision.")
@@ -794,7 +736,11 @@ def capture_piece(
             vision.robot_frame_centers, graveyard_hover_pose
         )
         graveyard_pose = square_to_robot_pose(
-            vision.robot_frame_centers, 0, 7, t_rb, piece_name=captured_piece_name
+            vision.robot_frame_centers,
+            GRAVEYARD_ANCHOR_ROW,
+            GRAVEYARD_ANCHOR_COL,
+            t_rb,
+            piece_name=captured_piece_name,
         )
         graveyard_pose[0, 3] -= 0.15
         capture_offset_x, capture_offset_y = capture_offsets(capture_count, 0.05)

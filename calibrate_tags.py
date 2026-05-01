@@ -1,11 +1,10 @@
 import cv2, numpy
 from pupil_apriltags import Detector
 
-from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
 from xarm.wrapper import XArmAPI
 
-
+ROBOT_IP_DEFAULT = "192.168.1.159"
 
 TAG_SIZE = 0.08
 PREVIEW_MAX_WIDTH = 1280
@@ -167,6 +166,18 @@ def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
     return cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
 
+def draw_pose_axes(image, camera_intrinsic, pose, size=0.1):
+    rvec, _ = cv2.Rodrigues(pose[:3, :3])
+    tvec = pose[:3, 3]
+    pts = numpy.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=numpy.float64).reshape(-1, 3) * size
+    ip, _ = cv2.projectPoints(pts, rvec, tvec, camera_intrinsic, None)
+    ip = numpy.round(ip).astype(int)
+    o, ux, uy, uz = (tuple(ip[i].ravel()) for i in range(4))
+    cv2.line(image, o, ux, (0, 0, 255), 2)
+    cv2.line(image, o, uy, (0, 255, 0), 2)
+    cv2.line(image, o, uz, (255, 0, 0), 2)
+
+
 def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     """PnP from playmat tags (ids 0–3); pass one tag per id from best_tag_per_id_0_3."""
     world_points, image_points = get_pnp_pairs(tags)
@@ -186,23 +197,6 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     return transform_mat
 
 
-def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
-    """Camera ← robot (playmat) from AprilTag PnP. Pass ``tags`` to skip re-detection."""
-    if tags is None:
-        _, playmat_raw, _ = detect_playmat_and_chessboard_tags(observation)
-        tags, ok = best_tag_per_id_0_3(playmat_raw)
-        if not ok:
-            print(
-                f"Playmat family {PLAYMAT_TAG_FAMILY}: need four tags with ids 0-3; "
-                f"got ids {sorted(set(int(t.tag_id) for t in playmat_raw))} (n={len(playmat_raw)})"
-            )
-            return None
-    print(f"Playmat tags for PnP: {len(tags)} (family {PLAYMAT_TAG_FAMILY})")
-    if tags:
-        print(f"Playmat tag ids: {sorted(set(int(t.tag_id) for t in tags))}")
-    return get_transform_camera_robot_from_tags(tags, camera_intrinsic)
-
-
 def main():
     zed = ZedCamera()
     camera_intrinsic = zed.camera_intrinsic
@@ -217,7 +211,13 @@ def main():
         vis = to_bgr_display(cv_image)
         draw_dual_family_tag_overlays(vis, playmat_tags, chess_tags)
 
-        t_cam_robot = get_transform_camera_robot(cv_image, camera_intrinsic, tags=None)
+        pm_best, pm_ok = best_tag_per_id_0_3(playmat_tags)
+        t_cam_robot = get_transform_camera_robot_from_tags(pm_best, camera_intrinsic) if pm_ok else None
+        if not pm_ok:
+            print(
+                f"Playmat {PLAYMAT_TAG_FAMILY}: need ids 0–3; "
+                f"got {sorted(set(int(t.tag_id) for t in playmat_tags))}"
+            )
         if t_cam_robot is not None:
             draw_pose_axes(vis, camera_intrinsic, t_cam_robot, size=TAG_SIZE)
             status = "PnP OK — pose axes (playmat %s)" % PLAYMAT_TAG_FAMILY
@@ -248,8 +248,7 @@ def main():
         cv2.destroyAllWindows()
 
     finally:
-        robot_ip = "192.168.1.159"
-        arm = XArmAPI(robot_ip)
+        arm = XArmAPI(ROBOT_IP_DEFAULT)
         arm.connect()
         arm.motion_enable(enable=True)
         arm.move_gohome(wait=True)

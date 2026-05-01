@@ -28,7 +28,7 @@ def count_white_captures(chess_board: chess.Board) -> int:
 
 
 def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move, zed) -> str:
-    """Execute one physical move for the side to move (must be Black)."""
+    """Execute one physical Black move (castling moves king then rook)."""
     _assert_black_to_move(chess_board, "execute_robot_move_on_board")
     from_sq = robot_move.from_square
     piece = chess_board.piece_at(from_sq)
@@ -48,11 +48,9 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
             raise RuntimeError("Castling failed: king piece not found on from-square.")
 
         if chess_board.is_kingside_castling(robot_move):
-            rook_from_sq = chess.H1 if chess_board.turn == chess.WHITE else chess.H8
-            rook_to_sq = chess.F1 if chess_board.turn == chess.WHITE else chess.F8
+            rook_from_sq, rook_to_sq = chess.H8, chess.F8
         else:
-            rook_from_sq = chess.A1 if chess_board.turn == chess.WHITE else chess.A8
-            rook_to_sq = chess.D1 if chess_board.turn == chess.WHITE else chess.D8
+            rook_from_sq, rook_to_sq = chess.A8, chess.D8
 
         rook_piece = chess_board.piece_at(rook_from_sq)
         if rook_piece is None:

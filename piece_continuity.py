@@ -27,9 +27,8 @@ BOARD_CONFIG = {
         2: [0.52848, 0.0],      # Bottom-Right
         3: [0.52848, 0.277]       # Top-Right
     },
-    # Offset from Tag 0 center to the bottom left corner of the first chessboard square (0,0)
-    #"grid_origin_offset": [0.03, -0.008] 
-    "grid_origin_offset": [0.0889, -0.0381] 
+    # Offset from Tag 0 center to the bottom-left of square (0,0) in board frame
+    "grid_origin_offset": [0.0889, -0.0381],
 }
 
 # --- 2. TRANSFORMATION LOGIC ---
@@ -165,8 +164,6 @@ def detect_pieces(warped, square_px):
                 board_state[row,col] = 2
             elif r > b+30 and r > g+30: #red
                 board_state[row,col] = 2
-            
-            #print(f"Row: {row}, Col:{col}\nr: {r}, g: {g}, b: {b}\ntotal: {total}\nBoard_state: {board_state[row,col]}")
 
     return board_state
 
@@ -228,8 +225,6 @@ def get_board_state(cv_image, detector, camera_intrinsic):
         p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
-    # print(f"Captured {len(tags)} tags.")
-    # print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
     if len(tags) < 4:
         print(f"Vision Error: only captured {len(tags)} tags.")
 

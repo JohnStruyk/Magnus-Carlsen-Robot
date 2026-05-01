@@ -1,29 +1,32 @@
 import time
 import faulthandler
+
 import chess
 from pupil_apriltags import Detector
 
 from utils.zed_camera import ZedCamera
 from piece_continuity import get_board_state, compare_board_states
 from game_persistence import detect_starting_fen, prompt_continue_saved_game, save_game_state
-from move_patterns import build_board_change
 from robot_turn import execute_robot_reply_turn
-from turn_processor import process_detected_change
-from ui_output import print_game_over_banner
+from turn_processor import BoardChange, process_detected_change
 
-CAPTURE_INTERVAL = 5  # seconds between captures
-
-# Fallback FEN if board is not in standard starting position.
-# Fill this in if you are starting from a known non-standard position.
+CAPTURE_INTERVAL = 5
 CURRENT_FEN = ""
 
-# Human plays White; the arm only executes Black (Stockfish). ``chess_board.turn`` is the source of truth.
+
+def print_game_over_banner(chess_board: chess.Board) -> None:
+    oc = chess_board.outcome(claim_draw=True)
+    term = oc.termination.name.replace("_", " ") if oc else "unknown"
+    res = oc.result() if oc else chess_board.result(claim_draw=True)
+    print("\n=== GAME OVER ===")
+    print(f"Result: {res} | {term}")
+    print(f"FEN: {chess_board.fen()}\n")
 
 
 def main():
     faulthandler.enable(all_threads=True)
     zed = ZedCamera()
-    detector = Detector(families='tag36h11 tag25h9')
+    detector = Detector(families="tag36h11 tag25h9")
     camera_intrinsic = zed.camera_intrinsic
 
     prior_board_state = None
@@ -69,8 +72,8 @@ def main():
                     print(f"Chess board initialized from FEN: {fen}")
 
                 if prior_board_state is not None:
-                    one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
-                    change = build_board_change(one_removals, two_removals, one_additions, two_additions)
+                    one_r, two_r, one_a, two_a = compare_board_states(prior_board_state, board_state)
+                    change = BoardChange(one_r, two_r, one_a, two_a)
 
                     if change.changed:
                         result = process_detected_change(
@@ -105,7 +108,6 @@ def main():
             time.sleep(sleep_time)
 
     finally:
-        # Save game state on any exit (normal finish, exception, etc.)
         save_game_state(chess_board)
 
 
