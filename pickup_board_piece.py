@@ -18,7 +18,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from xarm.wrapper import XArmAPI
 
-from checkpoint0 import (
+from calibrate_tags import (
     CHESSBOARD_TAG_FAMILY,
     PLAYMAT_TAG_FAMILY,
     TAG_SIZE,
@@ -61,6 +61,10 @@ TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 # Keep commanded yaw in a conservative range to reduce IK/joint limit faults.
 MAX_ABS_TOOL_YAW_DEG = 120.0
+# Neutral joint target to unwind accumulated wrist/arm rotation before disconnect.
+NEUTRAL_JOINT_ANGLES_DEG = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+NEUTRAL_JOINT_SPEED_DEG_S = 20
+NEUTRAL_JOINT_ACCEL_DEG_S2 = 100
 GRIPPER_LENGTH_M = 0.067
 ARM_SPEED_TRAVEL_MM_S = 80
 ARM_SPEED_DESCEND_MM_S = 30
@@ -486,11 +490,23 @@ def move_to_pose(
         target_z_mm = z_floor_mm
     lift_z_mm = max(safe_z_mm, target_z_mm + LIFT_Z_DELTA * 1000.0)
     _, _, yaw_deg = Rotation.from_matrix(t_robot_target[:3, :3]).as_euler("xyz", degrees=True)
+    base_yaw_deg = ((yaw_deg + 180.0) % 360.0) - 180.0
+
     if piece_name == "knight":
-        yaw_deg += 90.0
-    # Normalize then clamp yaw so wrist joints do not chase extreme rotations.
-    yaw_deg = ((yaw_deg + 180.0) % 360.0) - 180.0
-    yaw_deg = max(-MAX_ABS_TOOL_YAW_DEG, min(MAX_ABS_TOOL_YAW_DEG, yaw_deg))
+        # Keep knight gripper orientation truly orthogonal to board yaw.
+        # Prefer +90, fallback to -90 if +90 exceeds safety bounds.
+        knight_plus = ((base_yaw_deg + 90.0 + 180.0) % 360.0) - 180.0
+        knight_minus = ((base_yaw_deg - 90.0 + 180.0) % 360.0) - 180.0
+        if abs(knight_plus) <= MAX_ABS_TOOL_YAW_DEG:
+            yaw_deg = knight_plus
+        elif abs(knight_minus) <= MAX_ABS_TOOL_YAW_DEG:
+            yaw_deg = knight_minus
+        else:
+            # Last resort: clip the preferred orthogonal angle.
+            yaw_deg = max(-MAX_ABS_TOOL_YAW_DEG, min(MAX_ABS_TOOL_YAW_DEG, knight_plus))
+    else:
+        # Normalize then clamp yaw so wrist joints do not chase extreme rotations.
+        yaw_deg = max(-MAX_ABS_TOOL_YAW_DEG, min(MAX_ABS_TOOL_YAW_DEG, base_yaw_deg))
     if not np.isfinite([x_mm, y_mm, safe_z_mm, target_z_mm, yaw_deg]).all():
         raise RuntimeError(
             f"[pickup] Non-finite pose for move_to_pose: "
@@ -506,6 +522,17 @@ def move_to_pose(
         speed=descend_speed, is_radian=False, wait=True,
     )
     return x_mm, y_mm, lift_z_mm, yaw_deg
+
+
+def move_to_neutral_joints(arm: XArmAPI) -> None:
+    """Best-effort unwind to a near-zero joint posture."""
+    arm.set_servo_angle(
+        angle=NEUTRAL_JOINT_ANGLES_DEG,
+        speed=NEUTRAL_JOINT_SPEED_DEG_S,
+        mvacc=NEUTRAL_JOINT_ACCEL_DEG_S2,
+        is_radian=False,
+        wait=True,
+    )
 
 
 def pickup_pose(arm: XArmAPI, t_robot_target: np.ndarray, piece_name: Optional[str] = None) -> None:
@@ -711,6 +738,10 @@ def move_piece(
             if arm_connected:
                 time.sleep(0.2)
                 try:
+                    move_to_neutral_joints(arm)
+                except Exception:
+                    pass
+                try:
                     arm.disconnect()
                 except Exception:
                     pass
@@ -767,6 +798,10 @@ def stage_from_graveyard(
                 pass
             if arm_connected:
                 time.sleep(0.2)
+                try:
+                    move_to_neutral_joints(arm)
+                except Exception:
+                    pass
                 try:
                     arm.disconnect()
                 except Exception:
@@ -851,6 +886,10 @@ def remove_piece_to_graveyard(
             if arm_connected:
                 time.sleep(0.2)
                 try:
+                    move_to_neutral_joints(arm)
+                except Exception:
+                    pass
+                try:
                     arm.disconnect()
                 except Exception:
                     pass
@@ -921,6 +960,10 @@ def place_promotion_queen_from_source(
                 pass
             if arm_connected:
                 time.sleep(0.2)
+                try:
+                    move_to_neutral_joints(arm)
+                except Exception:
+                    pass
                 try:
                     arm.disconnect()
                 except Exception:
@@ -1048,6 +1091,10 @@ def capture_piece(
                 pass
             if arm_connected:
                 time.sleep(0.2)
+                try:
+                    move_to_neutral_joints(arm)
+                except Exception:
+                    pass
                 try:
                     arm.disconnect()
                 except Exception:

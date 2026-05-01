@@ -8,7 +8,7 @@ Press any key to quit.
 import cv2
 
 from utils.zed_camera import ZedCamera
-from checkpoint0 import (
+from calibrate_tags import (
     detect_playmat_and_chessboard_tags,
     best_tag_per_id_0_3,
     draw_dual_family_tag_overlays,

@@ -10,9 +10,9 @@ Files and packages that `game_loop.py` depends on, including transitive local de
 | `chess_utils.py` | UCI move determination from board diff |
 | `stockfish_int.py` | Stockfish engine interface, board SVG visualisation |
 | `pickup_board_piece.py` | Robot arm pick-and-place, capture logic |
-| `checkpoint0.py` | AprilTag detection, camera-to-robot transform (used by `pickup_board_piece`) |
+| `calibrate_tags.py` | AprilTag detection, camera-to-robot transform (used by `pickup_board_piece`) |
 | `utils/zed_camera.py` | ZED camera wrapper (threaded image + point cloud capture) |
-| `utils/vis_utils.py` | Pose axis drawing helpers (used by `pickup_board_piece` and `checkpoint0`) |
+| `utils/vis_utils.py` | Pose axis drawing helpers (used by `pickup_board_piece` and `calibrate_tags`) |
 
 ## Third-party packages
 

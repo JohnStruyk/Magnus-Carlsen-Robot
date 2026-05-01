@@ -325,12 +325,12 @@ def main():
         )
 
         print(
-            f"[checkpoint0] Preview: playmat n={len(playmat_tags)} chess n={len(chess_tags)}. {status}"
+            f"[calibrate_tags] Preview: playmat n={len(playmat_tags)} chess n={len(chess_tags)}. {status}"
         )
-        print("[checkpoint0] Press any key to close.")
+        print("[calibrate_tags] Press any key to close.")
 
-        cv2.namedWindow("checkpoint0: AprilTag preview", cv2.WINDOW_NORMAL)
-        cv2.imshow("checkpoint0: AprilTag preview", resize_for_preview(vis))
+        cv2.namedWindow("calibrate_tags: AprilTag preview", cv2.WINDOW_NORMAL)
+        cv2.imshow("calibrate_tags: AprilTag preview", resize_for_preview(vis))
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
