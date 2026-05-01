@@ -17,8 +17,7 @@ from stockfish_int import get_best_move, visualize_board
 from pickup_board_piece import (
     move_piece,
     capture_piece,
-    remove_piece_to_graveyard,
-    place_promotion_queen_from_source,
+    replace_promoted_pawn_with_source_queen,
 )
 
 CAPTURE_INTERVAL = 5  # seconds between captures
@@ -429,11 +428,8 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
         move_piece(from_occupant, from_square, to_square, zed)
 
     if robot_move.promotion is not None:
-        # Replace promoted pawn with a queen from cup:
-        # 1) remove pawn from promotion square to graveyard
-        # 2) pick queen from cup and place on promotion square
-        remove_piece_to_graveyard(from_occupant, to_square, zed, capture_count=0)
-        place_promotion_queen_from_source(to_square, zed)
+        # Replace promoted pawn with a queen from source in one combined pipeline.
+        replace_promoted_pawn_with_source_queen(to_square, zed)
 
     return move_string
 

@@ -99,6 +99,8 @@ PROMOTION_SOURCE_Y_M: Optional[float] = -0.3055
 PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
 PROMOTION_SOURCE_YAW_DEG = -32.8
 
+PROMOTION_PAWN_DISCARD_X_OFFSET_M = 0.05
+
 # Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
 PIECE_CONFIG = {
     "king_height": 0.0950214,
@@ -992,6 +994,110 @@ def place_promotion_queen_from_source(
         hover_pose(arm, promotion_source_pose)
         hover_pose(arm, forward_entry_pose)
         place_pose(arm, queen_to_pose, piece_name="queen")
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
+                except Exception:
+                    pass
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
+
+
+def replace_promoted_pawn_with_source_queen(
+    to_square: str,
+    zed: ZedCamera,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+) -> None:
+    """
+    Combined promotion pipeline in one arm session.
+
+    Steps:
+      1) Enter via forward waypoint and remove promoted pawn from board.
+      2) Move directly along back-row area to discard pose near queen source.
+      3) Pick spare queen from source and place it on promotion square.
+      4) Exit via forward waypoint back to graveyard hover.
+    """
+    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None or PROMOTION_SOURCE_Z_M is None:
+        raise RuntimeError(
+            "Set PROMOTION_SOURCE_X_M, PROMOTION_SOURCE_Y_M, and PROMOTION_SOURCE_Z_M in pickup_board_piece.py "
+            "before using robot promotions."
+        )
+
+    to_row, to_col = algebraic_to_row_col(to_square)
+    arm: Optional[XArmAPI] = None
+    arm_connected = False
+    graveyard_hover_pose: Optional[np.ndarray] = None
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
+
+        t_rb = vision.t_robot_board
+        promotion_square_pawn_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="pawn"
+        )
+        promotion_square_queen_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
+        )
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+        promotion_source_pose = _robot_xyz_pose(
+            float(PROMOTION_SOURCE_X_M),
+            float(PROMOTION_SOURCE_Y_M),
+            float(PROMOTION_SOURCE_Z_M),
+            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
+        )
+        promotion_pawn_discard_pose = _robot_xyz_pose(
+            float(PROMOTION_SOURCE_X_M + PROMOTION_PAWN_DISCARD_X_OFFSET_M),
+            float(PROMOTION_SOURCE_Y_M),
+            float(PROMOTION_SOURCE_Z_M),
+            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
+        )
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+
+        # Use forward entry only for promotion start.
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        pickup_pose(arm, promotion_square_pawn_pose, piece_name="pawn")
+
+        # Move directly to back-row discard area near queen source.
+        hover_pose(arm, promotion_pawn_discard_pose)
+        place_pose(arm, promotion_pawn_discard_pose, piece_name="pawn")
+
+        # Pick spare queen directly from source.
+        hover_pose(arm, promotion_source_pose)
+        pickup_pose(arm, promotion_source_pose, piece_name="queen")
+
+        # Place queen on promotion square.
+        place_pose(arm, promotion_square_queen_pose, piece_name="queen")
+
+        # Use forward entry only for promotion end.
         hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
     finally:
