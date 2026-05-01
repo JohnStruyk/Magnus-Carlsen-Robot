@@ -61,10 +61,10 @@ TOOL_ROLL_DEG = 180.0
 TOOL_PITCH_DEG = 0.0
 # Keep commanded yaw in a conservative range to reduce IK/joint limit faults.
 MAX_ABS_TOOL_YAW_DEG = 120.0
-# Neutral joint target to unwind accumulated wrist/arm rotation before disconnect.
-NEUTRAL_JOINT_ANGLES_DEG = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-NEUTRAL_JOINT_SPEED_DEG_S = 20
-NEUTRAL_JOINT_ACCEL_DEG_S2 = 100
+# Joint unwind settings applied before disconnect.
+JOINT_UNWIND_SPEED_DEG_S = 20
+JOINT_UNWIND_ACCEL_DEG_S2 = 100
+JOINT_RETURN_POSE_DEG = [90.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 GRIPPER_LENGTH_M = 0.067
 ARM_SPEED_TRAVEL_MM_S = 80
 ARM_SPEED_DESCEND_MM_S = 30
@@ -524,12 +524,17 @@ def move_to_pose(
     return x_mm, y_mm, lift_z_mm, yaw_deg
 
 
-def move_to_neutral_joints(arm: XArmAPI) -> None:
-    """Best-effort unwind to a near-zero joint posture."""
+def move_to_graveyard_mod180_joints(arm: XArmAPI, graveyard_hover_pose: Optional[np.ndarray]) -> None:
+    """
+    At graveyard hover, move to a fixed safe joint return pose.
+    """
+    if graveyard_hover_pose is not None:
+        hover_pose(arm, graveyard_hover_pose)
+
     arm.set_servo_angle(
-        angle=NEUTRAL_JOINT_ANGLES_DEG,
-        speed=NEUTRAL_JOINT_SPEED_DEG_S,
-        mvacc=NEUTRAL_JOINT_ACCEL_DEG_S2,
+        angle=JOINT_RETURN_POSE_DEG,
+        speed=JOINT_UNWIND_SPEED_DEG_S,
+        mvacc=JOINT_UNWIND_ACCEL_DEG_S2,
         is_radian=False,
         wait=True,
     )
@@ -738,7 +743,7 @@ def move_piece(
             if arm_connected:
                 time.sleep(0.2)
                 try:
-                    move_to_neutral_joints(arm)
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
                 except Exception:
                     pass
                 try:
@@ -765,6 +770,7 @@ def stage_from_graveyard(
     piece_name = normalize_piece_type(piece_type)
     arm: Optional[XArmAPI] = None
     arm_connected = False
+    graveyard_hover_pose: Optional[np.ndarray] = None
     try:
         img = zed.image
         if img is None:
@@ -799,7 +805,7 @@ def stage_from_graveyard(
             if arm_connected:
                 time.sleep(0.2)
                 try:
-                    move_to_neutral_joints(arm)
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
                 except Exception:
                     pass
                 try:
@@ -835,6 +841,7 @@ def remove_piece_to_graveyard(
 
     arm: Optional[XArmAPI] = None
     arm_connected = False
+    graveyard_hover_pose: Optional[np.ndarray] = None
     try:
         img = zed.image
         if img is None:
@@ -886,7 +893,7 @@ def remove_piece_to_graveyard(
             if arm_connected:
                 time.sleep(0.2)
                 try:
-                    move_to_neutral_joints(arm)
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
                 except Exception:
                     pass
                 try:
@@ -911,6 +918,7 @@ def place_promotion_queen_from_source(
     to_row, to_col = algebraic_to_row_col(to_square)
     arm: Optional[XArmAPI] = None
     arm_connected = False
+    graveyard_hover_pose: Optional[np.ndarray] = None
     try:
         img = zed.image
         if img is None:
@@ -961,7 +969,7 @@ def place_promotion_queen_from_source(
             if arm_connected:
                 time.sleep(0.2)
                 try:
-                    move_to_neutral_joints(arm)
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
                 except Exception:
                     pass
                 try:
@@ -1092,7 +1100,7 @@ def capture_piece(
             if arm_connected:
                 time.sleep(0.2)
                 try:
-                    move_to_neutral_joints(arm)
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
                 except Exception:
                     pass
                 try:
