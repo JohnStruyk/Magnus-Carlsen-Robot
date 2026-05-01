@@ -11,8 +11,7 @@ from piece_continuity import get_board_state
 from pickup_board_piece import (
     capture_piece,
     move_piece,
-    place_promotion_queen_from_source,
-    remove_piece_to_graveyard,
+    replace_promoted_pawn_with_source_queen,
 )
 from stockfish_int import get_best_move
 
@@ -69,8 +68,7 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
         move_piece(from_occupant, from_square, to_square, zed)
 
     if robot_move.promotion is not None:
-        remove_piece_to_graveyard(from_occupant, to_square, zed, capture_count=0)
-        place_promotion_queen_from_source(to_square, zed)
+        replace_promoted_pawn_with_source_queen(to_square, zed)
 
     return move_string
 
@@ -91,7 +89,7 @@ def execute_robot_move_with_retry(chess_board: chess.Board, robot_move: chess.Mo
                 f"(source {from_name} -> destination {to_name}): {exc}"
             )
             attempt += 1
-            time.sleep(0.5)
+            time.sleep(3)
 
 
 def capture_stable_board_state(zed, detector, camera_intrinsic):

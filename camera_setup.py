@@ -19,8 +19,7 @@ from calibrate_tags import (
 )
 
 
-def main() -> None:
-    """Run a live camera diagnostics view for dual-family AprilTag visibility."""
+def main():
     zed = ZedCamera()
     print("Camera running. Press any key in the window to quit.")
     print(f"  Playmat family  : {PLAYMAT_TAG_FAMILY}  (shown in green)")

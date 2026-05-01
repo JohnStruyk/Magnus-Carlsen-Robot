@@ -50,7 +50,7 @@ BOARD_TOTAL_SIZE_IN = 13.82
 BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
 BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
 # Keep homography-ray centers for safety/reachability while still using the
-# measured board size for square-size calibration.
+# hardcoded 14in square size in board config.
 USE_HARDCODED_SQUARE_CENTERS = False
 
 # ---------------------------------------------------------------------------
@@ -68,6 +68,9 @@ ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
 # toward row 7. Positive moves in +board-Y direction, negative in -board-Y.
 LOWER_ROWS_CENTER_SHIFT_M = 0.0
 LOWER_ROWS_START_ROW = 5
+# Linear depth correction along the board X-axis (row direction).
+# Row 0 (nearest base) gets 0 mm, row 7 (furthest) gets the full value.
+ROW_DEPTH_CORRECTION_MAX_M = 0.005  # 5 mm at row 7
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
 MIN_TOOL_Z_M = 0.04
@@ -94,10 +97,14 @@ GRAVEYARD_X_SHIFT_M = -0.15
 
 # Promotion source pose for spare queens in robot base frame.
 # Defaults are from measured basket pose in checkpoint2.py.
-PROMOTION_SOURCE_X_M: Optional[float] = 0.2301
-PROMOTION_SOURCE_Y_M: Optional[float] = -0.3055
+PROMOTION_SOURCE_X_M: Optional[float] = 0.221
+PROMOTION_SOURCE_Y_M: Optional[float] = -0.2942
 PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
 PROMOTION_SOURCE_YAW_DEG = -32.8
+# Absolute descend target at promotion source for queen pickup (robot base Z, meters).
+PROMOTION_SOURCE_GRASP_TARGET_Z_M = 0.075
+# Pawn discard spot: offset from source in +X (meters), ~5 cm toward board.
+PROMOTION_PAWN_DISCARD_X_OFFSET_M = 0.05
 
 # Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
 PIECE_CONFIG = {
@@ -114,7 +121,7 @@ GRASP_Z_OFFSET_PAWN_M = 0.045
 GRASP_Z_OFFSET_KNIGHT_M = 0.05
 GRASP_Z_OFFSET_BISHOP_M = 0.06
 GRASP_Z_OFFSET_ROOK_M = 0.045
-GRASP_Z_OFFSET_QUEEN_M = 0.08
+GRASP_Z_OFFSET_QUEEN_M = 0.075
 GRASP_Z_OFFSET_KING_M = 0.085
 
 PIECE_GRASP_Z_OFFSET_M = {
@@ -182,10 +189,11 @@ def normalize_piece_type(piece_type: str) -> str:
 def _board_config_for_pickup() -> dict:
     """``BOARD_CONFIG`` with optional measured tag edge / square size overrides."""
     cfg = {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
-    if CHESS_SQUARE_SIZE_M is not None:
-        cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
-    else:
-        cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
+    # Use ``BOARD_CONFIG["square_size"]`` from ``piece_continuity`` (aligned with dev calibration).
+    # if CHESS_SQUARE_SIZE_M is not None:
+    #     cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
+    # else:
+    #     cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
     return cfg
 
 
@@ -212,7 +220,7 @@ def warp_cell_center_to_robot_xyz(
     Returns ``None`` if the ray is parallel to the board (caller uses metric fallback).
     """
     u_w = float(col * square_px + square_px * 0.5)
-    v_w = float(row * square_px + square_px * 0.5)
+    v_w = float(row * square_px * 0.97 + square_px * 0.5)
     ph = H_warp_to_img @ np.array([u_w, v_w, 1.0], dtype=np.float64)
     if abs(ph[2]) < 1e-12:
         return None
@@ -282,6 +290,12 @@ def square_to_robot_pose(
     """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
+    # Linear depth correction: 0 mm at row 0 (near base), ROW_DEPTH_CORRECTION_MAX_M at row 7.
+    depth_weight = float(row) / 7.0
+    depth_correction = ROW_DEPTH_CORRECTION_MAX_M * depth_weight
+    board_x_axis_in_robot = t_robot_board[:3, 0].astype(np.float64)
+    t = t.copy()
+    t[:3] += board_x_axis_in_robot * depth_correction
     # Blend a lateral correction for lower rows to improve centering near the arm.
     if row >= LOWER_ROWS_START_ROW and LOWER_ROWS_CENTER_SHIFT_M != 0.0:
         denom = max(1, 7 - LOWER_ROWS_START_ROW)
@@ -943,9 +957,9 @@ def place_promotion_queen_from_source(
     robot_ip: str = ROBOT_IP_DEFAULT,
 ) -> None:
     """Pick a queen from a fixed promotion source pose and place it on promotion square."""
-    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None or PROMOTION_SOURCE_Z_M is None:
+    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None:
         raise RuntimeError(
-            "Set PROMOTION_SOURCE_X_M, PROMOTION_SOURCE_Y_M, and PROMOTION_SOURCE_Z_M in pickup_board_piece.py "
+            "Set PROMOTION_SOURCE_X_M and PROMOTION_SOURCE_Y_M in pickup_board_piece.py "
             "before using robot promotions."
         )
 
@@ -992,6 +1006,108 @@ def place_promotion_queen_from_source(
         hover_pose(arm, promotion_source_pose)
         hover_pose(arm, forward_entry_pose)
         place_pose(arm, queen_to_pose, piece_name="queen")
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
+                except Exception:
+                    pass
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
+
+
+def replace_promoted_pawn_with_source_queen(
+    to_square: str,
+    zed: ZedCamera,
+    robot_ip: str = ROBOT_IP_DEFAULT,
+) -> None:
+    """
+    Combined promotion pipeline in one arm session.
+
+    Steps:
+      1) Enter via forward waypoint and remove promoted pawn from board.
+      2) Move directly to discard pose near queen source (board-level Z).
+      3) Pick spare queen from source (75 mm grasp target at source).
+      4) Place queen on promotion square; exit via forward waypoint to graveyard hover.
+    """
+    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None or PROMOTION_SOURCE_Z_M is None:
+        raise RuntimeError(
+            "Set PROMOTION_SOURCE_X_M, PROMOTION_SOURCE_Y_M, and PROMOTION_SOURCE_Z_M in pickup_board_piece.py "
+            "before using robot promotions."
+        )
+
+    to_row, to_col = algebraic_to_row_col(to_square)
+    arm: Optional[XArmAPI] = None
+    arm_connected = False
+    graveyard_hover_pose: Optional[np.ndarray] = None
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
+                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
+            )
+
+        t_rb = vision.t_robot_board
+        promotion_square_pawn_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="pawn"
+        )
+        promotion_square_queen_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
+        )
+        source_level_z_m = float(
+            square_to_robot_pose(vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None)[2, 3]
+        )
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+        promotion_source_pose = _robot_xyz_pose(
+            float(PROMOTION_SOURCE_X_M),
+            float(PROMOTION_SOURCE_Y_M),
+            float(PROMOTION_SOURCE_GRASP_TARGET_Z_M - GRASP_Z_OFFSET),
+            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
+        )
+        promotion_pawn_discard_pose = _robot_xyz_pose(
+            float(PROMOTION_SOURCE_X_M + PROMOTION_PAWN_DISCARD_X_OFFSET_M),
+            float(PROMOTION_SOURCE_Y_M),
+            source_level_z_m,
+            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
+        )
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        pickup_pose(arm, promotion_square_pawn_pose, piece_name="pawn")
+
+        hover_pose(arm, promotion_pawn_discard_pose)
+        place_pose(arm, promotion_pawn_discard_pose, piece_name="pawn")
+
+        hover_pose(arm, promotion_source_pose)
+        pickup_pose(arm, promotion_source_pose, piece_name="queen")
+
+        place_pose(arm, promotion_square_queen_pose, piece_name="queen")
+
         hover_pose(arm, forward_entry_pose)
         hover_pose(arm, graveyard_hover_pose)
     finally:
