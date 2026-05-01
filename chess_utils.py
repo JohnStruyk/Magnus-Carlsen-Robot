@@ -18,7 +18,7 @@ def determine_castle(removals, additions):
 
 
 def determine_capture(capturing_removal, capturing_addition, captured_removal):
-    print("determining cpature")
+    print("determining capture")
     if np.array_equal(capturing_addition, captured_removal):
         return square_to_alg(capturing_removal) + square_to_alg(capturing_addition)
     print("BAD. Capturing piece didn't go to captured piece's location")

@@ -20,8 +20,8 @@ ROBOT_CALIB_CONFIG = {
 
 # Chessboard Calibration (4 tags on board to establish board-to-camera)
 BOARD_CONFIG = {
-    "tag_size": 0.0265,        
-    "square_size": 0.025,    
+    "tag_size": 0.05867,        
+    "square_size": 0.043,    
     "grid_size": (8, 8),     
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
@@ -30,7 +30,7 @@ BOARD_CONFIG = {
         2: [0.52848, 0.0],      # Bottom-Right
         3: [0.52848, 0.277]       # Top-Right
     },
-    # Offset from Tag 0 center to the center of the first chessboard square (0,0)
+    # Offset from Tag 0 center to the bottom left corner of the first chessboard square (0,0)
     #"grid_origin_offset": [0.03, -0.008] 
     "grid_origin_offset": [0.0889, -0.0381] 
 }
@@ -39,14 +39,12 @@ TAG_WIDTH_OFFSET = 17.5
 TAG_HEIGHT_OFFSET = -20.5
 
 
-
-
 # --- 2. TRANSFORMATION LOGIC ---
 
 def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     """Calculates the 4x4 transform matrix from the object to the camera."""
-    target_ids = set(config["tag_ids"])
-    found_tags = [t for t in tags if t.tag_id in target_ids]
+    target_ids = set(int(x) for x in config["tag_ids"])
+    found_tags = [t for t in tags if int(t.tag_id) in target_ids]
     
     # Logic to specify what should happen if not all the tags are seen, want all 4 for the chessboard part
     if strict and len(found_tags) < len(target_ids):
@@ -59,8 +57,8 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     half = config["tag_size"] / 2.0
 
     # Sort tags to ensure consistent mapping
-    for tag in sorted(found_tags, key=lambda x: x.tag_id):
-        cx, cy = config["tag_centers"][tag.tag_id]
+    for tag in sorted(found_tags, key=lambda x: int(x.tag_id)):
+        cx, cy = config["tag_centers"][int(tag.tag_id)]
         # World points for tag corners: BL, BR, TR, TL
         wp_corners = [
             [cx - half, cy - half, 0], 
@@ -87,14 +85,13 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     return t_mat, rvec, tvec 
 
 def get_board_centers_local(config):
-    """Generates 3D coordinates for the grid [X, Y, Z, 1]."""
+    """Square centers in board frame. Index ``i = r*8+c`` for nested ``for r: for c:`` (same order as warped ``row,col``)."""
     grid_pts = []
     off_x, off_y = config["grid_origin_offset"]
     s = config["square_size"]
 
     for r in range(config["grid_size"][0]):
         for c in range(config["grid_size"][1]):
-            # +X is Up (rows), +Y is Right (cols)
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
@@ -148,9 +145,8 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
-
-    #img corners are in 2d image space i think
-    return warped, img_corners
+    # img_corners -> warped: p_w ~ H @ p_img, so p_img = H^{-1} @ p_w for drawing on raw image.
+    return warped, img_corners, H_mat
 
 def detect_pieces(warped, square_px):
     board_state = np.zeros((8,8),dtype=int)
@@ -168,13 +164,15 @@ def detect_pieces(warped, square_px):
             total = b+g+r
 
             #classify by color
-            if g > r +30 and b > r+30 and total>130: #green piece, shows up turquoise ish
+            if g > r*2 - 10 and b > r*2 - 10: #green piece, shows up turquoise ish
                 board_state[row,col] = 1
             elif r > b +30 and g > b+30 and total<400: #yellow
                 board_state[row,col] = 2
             elif r > b+30 and r > g+30: #red
                 board_state[row,col] = 2
             
+            #print(f"Row: {row}, Col:{col}\nr: {r}, g: {g}, b: {b}\ntotal: {total}\nBoard_state: {board_state[row,col]}")
+
     return board_state
 
 
@@ -211,128 +209,101 @@ def compare_board_states(old_state, new_state):
     return one_removals, two_removals, one_additions, two_additions
 
 def get_board_state(cv_image, detector, camera_intrinsic):
+    """Detects board and pieces. Returns (board_state, warped_with_pieces, resized_raw) or (None, None, None) on failure."""
     gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
     tags = detector.detect(gray)
 
-    # 1. Camera -> Robot Transform (Using original Robot Tag logic)
+    # 1. Camera -> Robot Transform
     t_robot_to_cam, _, _ = get_4x4_transform(tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False)
     if t_robot_to_cam is None:
         print("Robot tags (0-3) not found.")
-        return
+        return None, None, None
     t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
 
-    # 2. Board -> Camera Transform (Using your new Tag 4-7 logic)
+    # 2. Board -> Camera Transform
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
     if t_board_to_cam is None:
-        print("Chessboard tags (4-7) not found.")
-        resized_img = cv2.resize(cv_image, (1080, 700))
-        cv2.imshow('Robot Calibration', resized_img)        
-        cv2.waitKey(0)
-        return
+        print("Chessboard tags not found.")
+        return None, None, cv2.resize(cv_image, (1080, 700))
 
     # 3. Compute Centers in Robot Frame
     local_centers = get_board_centers_local(BOARD_CONFIG)
     robot_frame_centers = {}
-
     for i, p_local in enumerate(local_centers):
-        # Transformation: Board -> Camera -> Robot
         p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
-    # 4. Visualization
-    pts_3d_xyz = local_centers[:, :3].astype(np.float32)
-    grid_2d, _ = cv2.projectPoints(pts_3d_xyz, b_rvec, b_tvec, camera_intrinsic, None)
-
-    for pt in grid_2d:
-        cv2.circle(cv_image, tuple(pt.ravel().astype(int)), 4, (0, 255, 0), -1)
-
-    # Add labels for debugging
-    for t in tags:
-        center = tuple(t.center.astype(int))
-        cv2.putText(cv_image, f"ID:{t.tag_id}", center, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-
-    print(f"Captured {len(tags)} tags.")
-    print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
+    # print(f"Captured {len(tags)} tags.")
+    # print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
+    if len(tags) < 4:
+        print("Vision Error: only captured {len(tags)} tags.")
 
     output_square_px = 100
-
-    warped, img_corners = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
-    
-    #Comment this out to remove piece detection
+    warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
     board_state = detect_pieces(warped, output_square_px)
     warped_with_pieces = draw_piece_detected(warped, board_state, output_square_px)
 
-
+    # Annotate raw image for display
+    pts_3d_xyz = local_centers[:, :3].astype(np.float32)
+    grid_2d, _ = cv2.projectPoints(pts_3d_xyz, b_rvec, b_tvec, camera_intrinsic, None)
+    for pt in grid_2d:
+        cv2.circle(cv_image, tuple(pt.ravel().astype(int)), 4, (0, 255, 0), -1)
+    for t in tags:
+        cv2.putText(cv_image, f"ID:{t.tag_id}", tuple(t.center.astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     for pt in img_corners:
-        cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0,0,255), -1)
+        cv2.circle(cv_image, tuple(pt.astype(int)), 10, (0, 0, 255), -1)
+    resized_raw = cv2.resize(cv_image, (1080, 700))
 
-    resized_img = cv2.resize(cv_image, (1080, 700))
+    return board_state, warped_with_pieces, resized_raw
 
-    overlay = np.zeros_like(warped)
-    colors = [(128, 0, 128), (0, 165, 255)]  # Purple and Orange (BGR)
 
-    for r in range(BOARD_CONFIG["grid_size"][0]):
-        for c in range(BOARD_CONFIG["grid_size"][1]):
-            color = colors[(r + c) % 2]
-            top_left = (c * output_square_px, r * output_square_px)
-            bottom_right = ((c + 1) * output_square_px, (r + 1) * output_square_px)
-            cv2.rectangle(overlay, top_left, bottom_right, color, -1)
-
-    # Blend: 0.5 (original) + 0.5 (overlay)
-    #warped = cv2.addWeighted(overlay, 0.3, warped, 0.7, 0)
-
-    cv2.imshow('Robot Calibration', resized_img)
-    cv2.waitKey(0)
-
-    #cv2.imshow("Warped Chessboard", warped)
+def display_board_state(warped_with_pieces, resized_raw):
+    """Shows the raw annotated image and the warped piece detection overlay, waits for keypress each."""
+    # cv2.imshow('Robot Calibration', resized_raw)
+    # cv2.waitKey(0)
     cv2.imshow('Warped with Piece Detection', warped_with_pieces)
     cv2.waitKey(0)
-
-    return board_state
 
 
 # --- 3. MAIN ---
 
 def main():
     zed = ZedCamera()
-   # camera_intrinsic = zed.camera_intrinsic
     detector = Detector(families='tag36h11 tag25h9')
-
     camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
 
-    init_image = zed.image
-
-    prior_board_state = get_board_state(init_image, detector, camera_intrinsic)
+    prior_board_state = None
 
     try:
         while True:
-
             cv_image = zed.image
+            board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
 
-            board_state = get_board_state(cv_image, detector, camera_intrinsic) # These are the center locations of the chess board squares relative to the robot frame
+            if board_state is None:
+                print("Board not detected, retrying...")
+                if resized_raw is not None:
+                    cv2.imshow('Robot Calibration', resized_raw)
+                    cv2.waitKey(0)
+                    cv2.destroyAllWindows()
+                continue
 
-            print(board_state)
-
-            one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
-
-            predicted_move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
-
-            key_pressed = cv2.waitKey(0)
-            if key_pressed == ord('k'):
-                break
-
+            display_board_state(warped_with_pieces, resized_raw)
             cv2.destroyAllWindows()
+
+            if prior_board_state is not None:
+                one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
+                predicted_move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
+                print(f"one_removals: {one_removals}")
+                print(f"two_removals: {two_removals}")
+                print(f"one_additions: {one_additions}")
+                print(f"two_additions: {two_additions}")
+                print(f"predicted move: {predicted_move}")
 
             prior_board_state = board_state
 
-            print(f"one_removals: {one_removals}")
-            print(f"two_removals: {two_removals}")
-            print(f"one_additions: {one_additions}")
-            print(f"two_additions: {two_additions}")
-            print(f"predicted move: {predicted_move}")
-
-
-
+            key_pressed = cv2.waitKey(1)
+            if key_pressed == ord('k'):
+                break
 
     finally:
         cv2.destroyAllWindows()
