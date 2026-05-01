@@ -21,7 +21,7 @@ ROBOT_CALIB_CONFIG = {
 # Chessboard Calibration (4 tags on board to establish board-to-camera)
 BOARD_CONFIG = {
     "tag_size": 0.05867,        
-    "square_size": 0.0432,    
+    "square_size": 0.043,    
     "grid_size": (8, 8),     
     "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
     "tag_centers": {
