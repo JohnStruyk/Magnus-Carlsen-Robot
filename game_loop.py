@@ -120,6 +120,48 @@ def parse_move_string(chess_board, move_string):
     return from_square, to_square, from_occupant, to_occupant
 
 
+def explain_illegal_move(chess_board, move_uci):
+    """Return a human-readable reason why a UCI move is illegal in current position."""
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except Exception:
+        return f"invalid UCI format: '{move_uci}'"
+
+    if move in chess_board.legal_moves:
+        return "move is legal"
+
+    from_piece = chess_board.piece_at(move.from_square)
+    to_piece = chess_board.piece_at(move.to_square)
+    side_to_move = chess_board.turn
+
+    if from_piece is None:
+        return f"no piece on source square {chess.square_name(move.from_square)}"
+
+    if from_piece.color != side_to_move:
+        wrong = "white" if from_piece.color == chess.WHITE else "black"
+        right = "white" if side_to_move == chess.WHITE else "black"
+        return f"source piece is {wrong}, but it is {right} to move"
+
+    if to_piece is not None and to_piece.color == side_to_move:
+        return f"destination {chess.square_name(move.to_square)} occupied by same-color piece"
+
+    if move not in chess_board.pseudo_legal_moves:
+        piece_name = chess.piece_name(from_piece.piece_type)
+        return (
+            f"{piece_name} cannot move from {chess.square_name(move.from_square)} "
+            f"to {chess.square_name(move.to_square)} by movement rules"
+        )
+
+    # Pseudo-legal but not legal usually means king safety issue.
+    test_board = chess_board.copy(stack=False)
+    test_board.push(move)
+    side_name = "white" if side_to_move == chess.WHITE else "black"
+    if test_board.is_check():
+        return f"move leaves {side_name} king in check"
+
+    return "violates current position constraints (special-rule mismatch)"
+
+
 def print_game_over_banner(chess_board):
     """Print an animated game-over report for terminal visibility."""
     outcome = chess_board.outcome(claim_draw=True)
@@ -449,6 +491,9 @@ def main():
                                 describe_move(chess_board, (one_removals, two_removals), (one_additions, two_additions))
 
                                 try:
+                                    legality_reason = explain_illegal_move(chess_board, move)
+                                    if legality_reason != "move is legal":
+                                        raise ValueError(legality_reason)
                                     chess_board.push_uci(move)
                                     _chess_board_ref[0] = chess_board
                                     turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
@@ -460,7 +505,8 @@ def main():
                                         print_game_over_banner(chess_board)
                                         break
                                 except Exception as e:
-                                    print(f"  ILLEGAL MOVE ({e}): please return pieces to original squares.")
+                                    print(f"  ILLEGAL MOVE: {e}")
+                                    print(f"  Candidate move was: {move}")
                                     all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                                     for rc, color_val in all_removals:
                                         sq = row_col_to_chess_square(*rc)
