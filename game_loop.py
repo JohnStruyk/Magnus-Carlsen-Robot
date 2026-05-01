@@ -440,24 +440,26 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
 
 def execute_robot_move_with_retry(chess_board, robot_move, zed):
     """
-    Retry robot move when vision transiently reports source square empty.
-    Keeps attempting the same move until the source square is seen populated.
+    Retry robot move for any runtime error.
+    Keeps attempting the same move until it succeeds.
     """
+    attempt = 1
     while True:
         try:
             return execute_robot_move_on_board(chess_board, robot_move, zed)
-        except RuntimeError as e:
-            msg = str(e)
-            if "appears empty in vision" in msg:
-                from_name = chess.square_name(robot_move.from_square)
-                to_name = chess.square_name(robot_move.to_square)
-                print(
-                    f"Robot move retry for {robot_move.uci()} "
-                    f"(source {from_name} -> destination {to_name}): {msg}"
-                )
-                time.sleep(0.5)
-                continue
+        except KeyboardInterrupt:
+            # Allow manual stop without swallowing Ctrl+C.
             raise
+        except Exception as e:
+            from_name = chess.square_name(robot_move.from_square)
+            to_name = chess.square_name(robot_move.to_square)
+            print(
+                f"Robot move retry #{attempt} for {robot_move.uci()} "
+                f"(source {from_name} -> destination {to_name}): {e}"
+            )
+            attempt += 1
+            time.sleep(0.5)
+            continue
 
 
 def main():
