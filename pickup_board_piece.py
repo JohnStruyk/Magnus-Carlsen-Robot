@@ -68,6 +68,9 @@ ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
 # toward row 7. Positive moves in +board-Y direction, negative in -board-Y.
 LOWER_ROWS_CENTER_SHIFT_M = 0.0
 LOWER_ROWS_START_ROW = 5
+# Linear depth correction along the board X-axis (row direction).
+# Row 0 (nearest base) gets 0mm, row 7 (furthest) gets the full value.
+ROW_DEPTH_CORRECTION_MAX_M = 0.005  # 5 mm at row 7
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
 MIN_TOOL_Z_M = 0.04
@@ -284,6 +287,12 @@ def square_to_robot_pose(
     """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
+    # Linear depth correction: 0mm at row 0 (near base), ROW_DEPTH_CORRECTION_MAX_M at row 7.
+    depth_weight = float(row) / 7.0
+    depth_correction = ROW_DEPTH_CORRECTION_MAX_M * depth_weight
+    board_x_axis_in_robot = t_robot_board[:3, 0].astype(np.float64)
+    t = t.copy()
+    t[:3] += board_x_axis_in_robot * depth_correction
     # Blend a lateral correction for lower rows to improve centering near the arm.
     if row >= LOWER_ROWS_START_ROW and LOWER_ROWS_CENTER_SHIFT_M != 0.0:
         denom = max(1, 7 - LOWER_ROWS_START_ROW)
