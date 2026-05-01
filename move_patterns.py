@@ -55,26 +55,6 @@ class BoardChange:
             return WHITE_ID
         return None
 
-    @property
-    def black_removals(self):
-        """Alias for ``one_removals`` with explicit color semantics."""
-        return self.one_removals
-
-    @property
-    def white_removals(self):
-        """Alias for ``two_removals`` with explicit color semantics."""
-        return self.two_removals
-
-    @property
-    def black_additions(self):
-        """Alias for ``one_additions`` with explicit color semantics."""
-        return self.one_additions
-
-    @property
-    def white_additions(self):
-        """Alias for ``two_additions`` with explicit color semantics."""
-        return self.two_additions
-
 
 def build_board_change(one_removals: Any, two_removals: Any, one_additions: Any, two_additions: Any) -> BoardChange:
     """Create a structured board-change object from raw compare arrays."""

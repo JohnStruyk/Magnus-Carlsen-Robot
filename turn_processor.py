@@ -26,7 +26,6 @@ from move_diagnostics import (
 class TurnProcessResult:
     """Outcome of processing one detected board-state change."""
 
-    turn: chess.Color
     prior_board_state: object
     game_over: bool
 
@@ -71,7 +70,7 @@ def process_detected_change(
                     moved_details.append(f"{piece_name} from {chess.square_name(sq)}")
                 print("Illegal black move on white's turn: " + ", ".join(moved_details))
         print_piece_return_instructions(chess_board, one_removals, two_removals)
-        return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+        return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     if change.is_castle:
         castle_color_val = BLACK_ID if len(one_removals) == 2 else WHITE_ID
@@ -80,7 +79,7 @@ def process_detected_change(
         castle_move = detect_castling(chess_board, removals, additions)
         if castle_move is None:
             print("Looks like castling but no legal castle move found. Please return pieces.")
-            return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+            return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
         print(f"Castling detected! UCI move: {castle_move}")
         try:
@@ -89,20 +88,22 @@ def process_detected_change(
             print(f"Castling applied: {castle_move}")
         except Exception as exc:
             print(f"  ILLEGAL CASTLE ({exc}): please return pieces to original squares.")
-            return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+            return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
         if turn == chess.BLACK and try_robot_reply("Black (robot) move failed"):
-            return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=True)
-        return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+            return TurnProcessResult(prior_board_state=board_state, game_over=True)
+        return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     if not change.is_single_move and not change.is_legal_capture:
         all_removals = [(tuple(rc), BLACK_ID) for rc in one_removals] + [(tuple(rc), WHITE_ID) for rc in two_removals]
         if all_removals:
             print("Invalid board change. Please return pieces to their original squares:")
             print_piece_return_instructions(chess_board, one_removals, two_removals)
-        return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+        return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
-    move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
+    move = chess_utils.determine_move(
+        one_removals, two_removals, one_additions, two_additions, chess_board
+    )
     if turn == chess.WHITE:
         print(f"Recorded human (White) move: {move}")
     else:
@@ -120,15 +121,15 @@ def process_detected_change(
             print(f"Check: {checked_side} is in check.")
         if chess_board.is_game_over(claim_draw=True):
             on_game_over(chess_board)
-            return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=True)
+            return TurnProcessResult(prior_board_state=board_state, game_over=True)
     except Exception as exc:
         print(f"  ILLEGAL MOVE: {exc}")
         print(f"  Candidate move was: {move}")
         print_illegal_move_report(chess_board, move)
         print_piece_return_instructions(chess_board, one_removals, two_removals)
-        return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+        return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     if turn == chess.BLACK and try_robot_reply("Black (robot) move failed"):
-        return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=True)
+        return TurnProcessResult(prior_board_state=board_state, game_over=True)
 
-    return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
+    return TurnProcessResult(prior_board_state=board_state, game_over=False)

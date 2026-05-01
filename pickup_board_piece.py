@@ -767,12 +767,19 @@ def capture_piece(
     zed: ZedCamera,
     capture_count: int = 0,
     robot_ip: str = ROBOT_IP_DEFAULT,
+    captured_square: Optional[str] = None,
 ) -> None:
-    """Capture one frame, run vision, then execute capture sequence (remove victim, move attacker)."""
+    """Capture one frame, run vision, then execute capture sequence (remove victim, move attacker).
+
+    For en passant, pass ``captured_square`` as the victim pawn's square (the capturing piece still
+    lands on ``to_square``).
+    """
     capturing_piece_name = normalize_piece_type(capturing_piece_type)
     captured_piece_name = normalize_piece_type(captured_piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
     to_row, to_col = algebraic_to_row_col(to_square)
+    victim_square = captured_square if captured_square is not None else to_square
+    victim_row, victim_col = algebraic_to_row_col(victim_square)
 
     arm: Optional[XArmAPI] = None
     graveyard_pose: Optional[np.ndarray] = None
@@ -796,7 +803,7 @@ def capture_piece(
 
         t_rb = vision.t_robot_board
         captured_from_pose = square_to_robot_pose(
-            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=captured_piece_name
+            vision.robot_frame_centers, victim_row, victim_col, t_rb, piece_name=captured_piece_name
         )
         graveyard_hover_pose = build_graveyard_pose(
             vision.robot_frame_centers, t_rb, captured_piece_name

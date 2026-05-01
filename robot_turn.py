@@ -71,11 +71,25 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
     from_square = chess.square_name(from_sq)
     to_square = chess.square_name(to_sq)
     from_occupant = from_piece.symbol()
-    to_occupant = to_piece.symbol() if to_piece is not None else None
 
-    if to_occupant is not None:
+    if chess_board.is_en_passant(robot_move):
+        victim_sq = to_sq + (8 if chess_board.turn == chess.BLACK else -8)
+        victim = chess_board.piece_at(victim_sq)
+        if victim is None:
+            raise RuntimeError("En passant failed: victim square empty.")
         capture_count = count_white_captures(chess_board)
-        capture_piece(from_occupant, to_occupant, from_square, to_square, zed, capture_count)
+        capture_piece(
+            from_occupant,
+            victim.symbol(),
+            from_square,
+            to_square,
+            zed,
+            capture_count,
+            captured_square=chess.square_name(victim_sq),
+        )
+    elif to_piece is not None:
+        capture_count = count_white_captures(chess_board)
+        capture_piece(from_occupant, to_piece.symbol(), from_square, to_square, zed, capture_count)
     else:
         move_piece(from_occupant, from_square, to_square, zed)
 

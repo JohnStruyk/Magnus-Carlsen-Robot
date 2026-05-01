@@ -33,6 +33,8 @@ Computer-vision + chess-engine + xArm integration for a physical chess robot.
 6. **Robot plays Black** — after each recorded White move, Stockfish chooses Black’s reply and the arm executes only that Black move.
 7. Refresh the vision baseline after the robot moves so the next diff is human-only.
 
+En passant is supported: vision diffs are matched to legal en-passant moves via `chess_utils.determine_move(..., board)`, and the arm uses `capture_piece(..., captured_square=...)` so the victim pawn is taken from the correct square.
+
 ## Configuration hotspots
 
 - **Board geometry / targeting:** `piece_continuity.py` (`BOARD_CONFIG` / `square_size`), `pickup_board_piece.py` (`HAND_EYE_XYZ_BIAS_M`, grasp offsets)

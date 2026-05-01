@@ -18,7 +18,6 @@ CAPTURE_INTERVAL = 5  # seconds between captures
 CURRENT_FEN = ""
 
 # Human plays White; the arm only executes Black (Stockfish). ``chess_board.turn`` is the source of truth.
-_chess_board_ref = [None]
 
 
 def main():
@@ -34,7 +33,6 @@ def main():
     resume_robot_pending = bool(
         resumed and chess_board is not None and chess_board.turn == chess.BLACK
     )
-    _chess_board_ref[0] = chess_board  # keep signal handler in sync
 
     def try_robot_reply(error_prefix: str):
         nonlocal prior_board_state, chess_board
@@ -45,7 +43,6 @@ def main():
             _, prior_board_state, game_over = execute_robot_reply_turn(
                 chess_board, zed, detector, camera_intrinsic, print_game_over_banner
             )
-            _chess_board_ref[0] = chess_board
             return game_over
         except Exception as exc:
             print(f"  {error_prefix}: {exc}")
@@ -69,7 +66,6 @@ def main():
                         print("WARNING: Unknown board state. Set CURRENT_FEN at the top of game_loop.py and restart.")
                         break
                     chess_board = chess.Board(fen)
-                    _chess_board_ref[0] = chess_board
                     print(f"Chess board initialized from FEN: {fen}")
 
                 if prior_board_state is not None:
@@ -86,7 +82,6 @@ def main():
                             print_game_over_banner,
                         )
                         prior_board_state = result.prior_board_state
-                        _chess_board_ref[0] = chess_board
                         if result.game_over:
                             break
                     else:
@@ -111,7 +106,7 @@ def main():
 
     finally:
         # Save game state on any exit (normal finish, exception, etc.)
-        save_game_state(_chess_board_ref[0])
+        save_game_state(chess_board)
 
 
 if __name__ == "__main__":
