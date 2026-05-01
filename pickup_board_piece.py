@@ -97,8 +97,8 @@ GRAVEYARD_X_SHIFT_M = -0.15
 
 # Promotion source pose for spare queens in robot base frame.
 # Defaults are from measured basket pose in checkpoint2.py.
-PROMOTION_SOURCE_X_M: Optional[float] = 0.2301
-PROMOTION_SOURCE_Y_M: Optional[float] = -0.3055
+PROMOTION_SOURCE_X_M: Optional[float] = 0.221
+PROMOTION_SOURCE_Y_M: Optional[float] = -0.2942
 PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
 PROMOTION_SOURCE_YAW_DEG = -32.8
 
