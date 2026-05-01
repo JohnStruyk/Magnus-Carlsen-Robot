@@ -954,9 +954,9 @@ def place_promotion_queen_from_source(
     robot_ip: str = ROBOT_IP_DEFAULT,
 ) -> None:
     """Pick a queen from a fixed promotion source pose and place it on promotion square."""
-    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None or PROMOTION_SOURCE_Z_M is None:
+    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None:
         raise RuntimeError(
-            "Set PROMOTION_SOURCE_X_M, PROMOTION_SOURCE_Y_M, and PROMOTION_SOURCE_Z_M in pickup_board_piece.py "
+            "Set PROMOTION_SOURCE_X_M and PROMOTION_SOURCE_Y_M in pickup_board_piece.py "
             "before using robot promotions."
         )
 
@@ -1067,18 +1067,23 @@ def replace_promoted_pawn_with_source_queen(
         promotion_square_queen_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
         )
+        # Use board-level Z (same baseline as normal board pieces), not old cup-height Z.
+        promotion_square_board_pose = square_to_robot_pose(
+            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None
+        )
+        board_level_z_m = float(promotion_square_board_pose[2, 3])
         graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
         forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
         promotion_source_pose = _robot_xyz_pose(
             float(PROMOTION_SOURCE_X_M),
             float(PROMOTION_SOURCE_Y_M),
-            float(PROMOTION_SOURCE_Z_M),
+            board_level_z_m,
             yaw_deg=PROMOTION_SOURCE_YAW_DEG,
         )
         promotion_pawn_discard_pose = _robot_xyz_pose(
             float(PROMOTION_SOURCE_X_M + PROMOTION_PAWN_DISCARD_X_OFFSET_M),
             float(PROMOTION_SOURCE_Y_M),
-            float(PROMOTION_SOURCE_Z_M),
+            board_level_z_m,
             yaw_deg=PROMOTION_SOURCE_YAW_DEG,
         )
 
