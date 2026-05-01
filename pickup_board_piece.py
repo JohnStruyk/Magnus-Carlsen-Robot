@@ -45,6 +45,13 @@ from utils.zed_camera import ZedCamera
 BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
 CHESS_SQUARE_SIZE_M: Optional[float] = None
 HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
+# Hardcoded board geometry: 14in x 14in total board footprint.
+BOARD_TOTAL_SIZE_IN = 14.0
+BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
+BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
+# Force metric square centers from board-frame geometry (stable/tunable),
+# instead of per-frame homography-ray centers.
+USE_HARDCODED_SQUARE_CENTERS = True
 
 # ---------------------------------------------------------------------------
 # Robot motion (Lite6 + parallel gripper)
@@ -57,6 +64,10 @@ PLACE_Z_OFFSET = 0.002
 # Adaptive board-row Z tweak (meters): lower row 1 targets slightly.
 ROW1_Z_ADJUST_M = -0.004
 ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
+# Lateral centering tweak for lower/near rows (meters), blended from start row
+# toward row 7. Positive moves in +board-Y direction, negative in -board-Y.
+LOWER_ROWS_CENTER_SHIFT_M = -0.003
+LOWER_ROWS_START_ROW = 5
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
 MIN_TOOL_Z_M = 0.04
@@ -173,6 +184,8 @@ def _board_config_for_pickup() -> dict:
     cfg = {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
     if CHESS_SQUARE_SIZE_M is not None:
         cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
+    else:
+        cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
     return cfg
 
 
@@ -236,10 +249,13 @@ def compute_robot_frame_centers(
     for r in range(8):
         for c in range(8):
             p_fb = (t_robot_cam @ (t_board_to_cam @ local[idx]))[:3]
-            p = warp_cell_center_to_robot_xyz(
-                r, c, square_px, H_warp_to_img, K, t_board_to_cam, t_robot_cam
-            )
-            out[idx] = (p if p is not None else p_fb.astype(np.float64)).tolist()
+            if USE_HARDCODED_SQUARE_CENTERS:
+                out[idx] = p_fb.astype(np.float64).tolist()
+            else:
+                p = warp_cell_center_to_robot_xyz(
+                    r, c, square_px, H_warp_to_img, K, t_board_to_cam, t_robot_cam
+                )
+                out[idx] = (p if p is not None else p_fb.astype(np.float64)).tolist()
             idx += 1
     return out
 
@@ -266,6 +282,13 @@ def square_to_robot_pose(
     """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
+    # Blend a lateral correction for lower rows to improve centering near the arm.
+    if row >= LOWER_ROWS_START_ROW and LOWER_ROWS_CENTER_SHIFT_M != 0.0:
+        denom = max(1, 7 - LOWER_ROWS_START_ROW)
+        w = float(row - LOWER_ROWS_START_ROW) / float(denom)
+        board_y_axis_in_robot = t_robot_board[:3, 1].astype(np.float64)
+        t = t.copy()
+        t[:3] += board_y_axis_in_robot * (LOWER_ROWS_CENTER_SHIFT_M * w)
     # Smoothly taper row-1 Z compensation across nearby rows.
     # row=1 gets full adjustment; neighbors get partial adjustment.
     dist_from_row1 = abs(float(row) - 1.0)
