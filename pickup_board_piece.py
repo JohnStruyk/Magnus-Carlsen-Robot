@@ -217,7 +217,7 @@ def warp_cell_center_to_robot_xyz(
     Returns ``None`` if the ray is parallel to the board (caller uses metric fallback).
     """
     u_w = float(col * square_px + square_px * 0.5)
-    v_w = float(row * square_px + square_px * 0.5)
+    v_w = float(row * square_px * 0.5 + square_px * 0.5)
     ph = H_warp_to_img @ np.array([u_w, v_w, 1.0], dtype=np.float64)
     if abs(ph[2]) < 1e-12:
         return None
