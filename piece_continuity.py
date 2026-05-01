@@ -252,9 +252,7 @@ def get_board_state(cv_image, detector, camera_intrinsic):
     return board_state, warped_with_pieces, resized_raw
 
 
-def display_board_state(warped_with_pieces, resized_raw):
-    """Shows the raw annotated image and the warped piece detection overlay, waits for keypress each."""
-    # cv2.imshow('Robot Calibration', resized_raw)
-    # cv2.waitKey(0)
-    cv2.imshow('Warped with Piece Detection', warped_with_pieces)
+def display_board_state(warped_with_pieces) -> None:
+    """Show warped piece-detection overlay; wait for a keypress."""
+    cv2.imshow("Warped with Piece Detection", warped_with_pieces)
     cv2.waitKey(0)

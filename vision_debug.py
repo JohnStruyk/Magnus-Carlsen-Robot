@@ -30,7 +30,7 @@ def main() -> None:
                     cv2.destroyAllWindows()
                 continue
 
-            display_board_state(warped_with_pieces, resized_raw)
+            display_board_state(warped_with_pieces)
             cv2.destroyAllWindows()
 
             if prior_board_state is not None:

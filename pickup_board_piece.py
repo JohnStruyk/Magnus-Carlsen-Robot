@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -114,18 +114,11 @@ PIECE_GRASP_Z_OFFSET_M = {
 
 @dataclass(frozen=True)
 class PickVision:
-    """Outputs of one camera frame: warped board, occupancy, transforms, homography."""
+    """Occupancy + square centers + board pose for one grab (warp/tags not retained)."""
 
-    warped: np.ndarray
     board_state: np.ndarray
     robot_frame_centers: Dict[int, List[float]]
     t_robot_board: np.ndarray
-    playmat_tags: List[Any]
-    chessboard_tags: List[Any]
-    t_cam_robot: np.ndarray
-    split_msg: str
-    H_warp_to_img: np.ndarray
-    square_px: int
 
 
 # =============================================================================
@@ -306,10 +299,6 @@ def build_vision_from_piece_continuity(
     _, playmat_raw, chess_raw = detect_playmat_and_chessboard_tags(img)
     playmat_tags, pm_ok = best_tag_per_id_0_3(playmat_raw)
     board_tags, ch_ok = best_tag_per_id_0_3(chess_raw)
-    split_msg = (
-        f"dual-family playmat {PLAYMAT_TAG_FAMILY} n={len(playmat_raw)} (ok 4 corners: {pm_ok}), "
-        f"chess {CHESSBOARD_TAG_FAMILY} n={len(chess_raw)} (ok 4 corners: {ch_ok})"
-    )
     if not pm_ok:
         return None
     if not ch_ok:
@@ -365,16 +354,9 @@ def build_vision_from_piece_continuity(
         raise RuntimeError("[pickup] board_state has non-finite values.")
 
     return PickVision(
-        warped=warped,
         board_state=board_state,
         robot_frame_centers=centers,
         t_robot_board=t_robot_board,
-        playmat_tags=list(playmat_raw),
-        chessboard_tags=list(chess_raw),
-        t_cam_robot=t_cam_robot,
-        split_msg=split_msg,
-        H_warp_to_img=H_warp_to_img,
-        square_px=square_px,
     )
 
 

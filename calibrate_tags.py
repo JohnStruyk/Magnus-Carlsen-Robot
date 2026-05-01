@@ -14,9 +14,6 @@ PREVIEW_MAX_WIDTH = 1280
 # tag36h11 ≈ 6×6; tag25h9 ≈ 5×5. Swap if your physical prints are reversed.
 PLAYMAT_TAG_FAMILY = "tag36h11"
 CHESSBOARD_TAG_FAMILY = "tag25h9"
-APRILTAG_FAMILY = PLAYMAT_TAG_FAMILY
-
-PLAYMAT_TAG_IDS = (0, 1, 2, 3)
 _DETECTOR_CACHE = {}
 
 # Playmat corners in robot frame — ids 0–3 in PLAYMAT_TAG_FAMILY
@@ -89,20 +86,6 @@ def _to_gray(image):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
-def detect_apriltags_gray(image, families=None):
-    """Return (gray_uint8, tags). Safe grayscale conversion."""
-    if image is None:
-        return None, []
-    fam = families or APRILTAG_FAMILY
-    gray = _to_gray(image)
-    detector = _DETECTOR_CACHE.get(fam)
-    if detector is None:
-        detector = Detector(families=fam)
-        _DETECTOR_CACHE[fam] = detector
-    tags = detector.detect(gray, estimate_tag_pose=False)
-    return gray, tags
-
-
 def detect_playmat_and_chessboard_tags(image):
     """
     Run two detectors: playmat (e.g. tag36h11) and chessboard (e.g. tag25h9). Both use ids 0–3.
@@ -139,60 +122,6 @@ def best_tag_per_id_0_3(tags):
             by_id[tid] = t
     ordered = [by_id[i] for i in (0, 1, 2, 3) if i in by_id]
     return ordered, len(by_id) == 4
-
-
-def draw_all_tag_overlays(bgr_image, tags):
-    """
-    Draw every detected tag: outline, center, ID (and hamming if present).
-    Mutates bgr_image in place.
-    """
-    for tag in tags:
-        tid = int(tag.tag_id)
-        corners = numpy.asarray(tag.corners, dtype=numpy.int32)
-        if corners.shape[0] >= 4:
-            for i in range(4):
-                p0 = tuple(corners[i])
-                p1 = tuple(corners[(i + 1) % 4])
-                cv2.line(bgr_image, p0, p1, (0, 255, 0), 2)
-        cx, cy = int(tag.center[0]), int(tag.center[1])
-        label = f"id:{tid}"
-        if getattr(tag, "hamming", None) is not None:
-            label += f" h:{tag.hamming}"
-        if getattr(tag, "decision_margin", None) is not None:
-            label += f" dm:{float(tag.decision_margin):.0f}"
-        cv2.circle(bgr_image, (cx, cy), 6, (0, 0, 255), -1)
-        cv2.putText(
-            bgr_image,
-            label,
-            (cx + 8, cy),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-    n_ids = sum(1 for t in tags if 0 <= int(t.tag_id) <= 3)
-    summary = f"tags={len(tags)} (ids 0-3 count={n_ids}) family={APRILTAG_FAMILY}"
-    cv2.putText(
-        bgr_image,
-        summary,
-        (12, 28),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        bgr_image,
-        summary,
-        (10, 26),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (0, 0, 0),
-        1,
-        cv2.LINE_AA,
-    )
 
 
 def draw_dual_family_tag_overlays(bgr_image, playmat_tags, chessboard_tags):
@@ -258,8 +187,7 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
 
 
 def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
-    """Camera <- robot (playmat) from AprilTag PnP. Optional ``tags`` skips re-detection."""
-
+    """Camera ← robot (playmat) from AprilTag PnP. Pass ``tags`` to skip re-detection."""
     if tags is None:
         _, playmat_raw, _ = detect_playmat_and_chessboard_tags(observation)
         tags, ok = best_tag_per_id_0_3(playmat_raw)
@@ -271,24 +199,9 @@ def get_transform_camera_robot(observation, camera_intrinsic, tags=None):
             return None
     print(f"Playmat tags for PnP: {len(tags)} (family {PLAYMAT_TAG_FAMILY})")
     if tags:
-        ids = sorted(set(int(t.tag_id) for t in tags))
-        print(f"Playmat tag ids: {ids}")
-    world_points, image_points = get_pnp_pairs(tags)
-    if world_points.shape[0] < 4:
-        print(f'Insufficient valid tag corners found.')
-        return None
+        print(f"Playmat tag ids: {sorted(set(int(t.tag_id) for t in tags))}")
+    return get_transform_camera_robot_from_tags(tags, camera_intrinsic)
 
-    # Get Transformation
-    success, rotation_vec, translation = cv2.solvePnP(world_points, image_points, camera_intrinsic, None)
-    if success is not True:
-        print('PnP Calculation Failed.')
-        return None
-    rotation_mat, _ = cv2.Rodrigues(rotation_vec)
-    transform_mat = numpy.eye(4)
-    transform_mat[:3, :3] = rotation_mat
-    transform_mat[:3, 3] = translation.flatten()
-
-    return transform_mat
 
 def main():
     zed = ZedCamera()

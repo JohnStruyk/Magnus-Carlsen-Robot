@@ -98,7 +98,7 @@ Files and packages the runtime depends on, including common transitive local mod
 | `stockfish_int.py` | Stockfish engine interface, board SVG visualisation |
 | `pickup_board_piece.py` | Robot arm pick-and-place, capture logic |
 | `calibrate_tags.py` | AprilTag detection, camera-to-robot transform (used by `pickup_board_piece`) |
-| `utils/zed_camera.py` | ZED camera wrapper (threaded image + point cloud capture) |
+| `utils/zed_camera.py` | ZED camera wrapper (threaded left RGB + intrinsics) |
 | `utils/vis_utils.py` | Pose axis drawing helpers (used by `calibrate_tags`) |
 
 ### Third-party packages
