@@ -54,6 +54,9 @@ SAFE_Z = 0.14
 GRASP_Z_OFFSET = 0.0001
 LIFT_Z_DELTA = 0.06
 PLACE_Z_OFFSET = 0.002
+# Adaptive board-row Z tweak (meters): lower row 1 targets slightly.
+ROW1_Z_ADJUST_M = -0.004
+ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
 MIN_TOOL_Z_M = 0.04
@@ -263,6 +266,14 @@ def square_to_robot_pose(
     """
     idx = row * 8 + col
     t = np.asarray(robot_frame_centers[idx][:3], dtype=np.float64) + HAND_EYE_XYZ_BIAS_M
+    # Smoothly taper row-1 Z compensation across nearby rows.
+    # row=1 gets full adjustment; neighbors get partial adjustment.
+    dist_from_row1 = abs(float(row) - 1.0)
+    weight = max(0.0, 1.0 - (dist_from_row1 / ROW1_Z_ADJUST_RADIUS_ROWS))
+    row_z_adjust = ROW1_Z_ADJUST_M * weight
+    if row_z_adjust != 0.0:
+        t = t.copy()
+        t[2] += row_z_adjust
     if piece_name is not None:
         t = t.copy()
         t[2] += piece_grasp_vertical_offset_m(piece_name)

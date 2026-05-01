@@ -134,22 +134,35 @@ def explain_illegal_move(chess_board, move_uci):
     to_piece = chess_board.piece_at(move.to_square)
     side_to_move = chess_board.turn
 
+    from_name = chess.square_name(move.from_square)
+    to_name = chess.square_name(move.to_square)
+
     if from_piece is None:
-        return f"no piece on source square {chess.square_name(move.from_square)}"
+        return (
+            f"No piece exists on {from_name}. In chess terms, you attempted to move "
+            "from an empty square."
+        )
 
     if from_piece.color != side_to_move:
         wrong = "white" if from_piece.color == chess.WHITE else "black"
         right = "white" if side_to_move == chess.WHITE else "black"
-        return f"source piece is {wrong}, but it is {right} to move"
+        return (
+            f"Turn violation: piece on {from_name} is {wrong}, but it is {right} to move. "
+            "You can only move your own color on your turn."
+        )
 
     if to_piece is not None and to_piece.color == side_to_move:
-        return f"destination {chess.square_name(move.to_square)} occupied by same-color piece"
+        side = "white" if side_to_move == chess.WHITE else "black"
+        return (
+            f"Illegal destination: {to_name} is occupied by another {side} piece. "
+            "A move cannot capture or replace a friendly piece."
+        )
 
     if move not in chess_board.pseudo_legal_moves:
         piece_name = chess.piece_name(from_piece.piece_type)
         return (
-            f"{piece_name} cannot move from {chess.square_name(move.from_square)} "
-            f"to {chess.square_name(move.to_square)} by movement rules"
+            f"Piece-movement rule violation: a {piece_name} cannot legally move "
+            f"from {from_name} to {to_name} in this position."
         )
 
     # Pseudo-legal but not legal usually means king safety issue.
@@ -157,9 +170,15 @@ def explain_illegal_move(chess_board, move_uci):
     test_board.push(move)
     side_name = "white" if side_to_move == chess.WHITE else "black"
     if test_board.is_check():
-        return f"move leaves {side_name} king in check"
+        return (
+            f"King safety violation: after {move_uci}, the {side_name} king remains in check. "
+            "Moves that leave your king in check are illegal."
+        )
 
-    return "violates current position constraints (special-rule mismatch)"
+    return (
+        "Move violates a position-specific chess rule (likely castling rights, en passant "
+        "timing, or another special constraint in the current board state)."
+    )
 
 
 def print_game_over_banner(chess_board):
