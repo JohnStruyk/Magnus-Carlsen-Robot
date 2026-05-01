@@ -101,6 +101,8 @@ PROMOTION_SOURCE_X_M: Optional[float] = 0.221
 PROMOTION_SOURCE_Y_M: Optional[float] = -0.2942
 PROMOTION_SOURCE_Z_M: Optional[float] = 0.1511
 PROMOTION_SOURCE_YAW_DEG = -32.8
+# Absolute descend target at promotion source for queen pickup.
+PROMOTION_SOURCE_GRASP_TARGET_Z_M = 0.075
 
 PROMOTION_PAWN_DISCARD_X_OFFSET_M = 0.05
 
@@ -119,7 +121,7 @@ GRASP_Z_OFFSET_PAWN_M = 0.045
 GRASP_Z_OFFSET_KNIGHT_M = 0.05
 GRASP_Z_OFFSET_BISHOP_M = 0.06
 GRASP_Z_OFFSET_ROOK_M = 0.045
-GRASP_Z_OFFSET_QUEEN_M = 0.08
+GRASP_Z_OFFSET_QUEEN_M = 0.075
 GRASP_Z_OFFSET_KING_M = 0.085
 
 PIECE_GRASP_Z_OFFSET_M = {
@@ -1075,7 +1077,9 @@ def replace_promoted_pawn_with_source_queen(
         promotion_source_pose = _robot_xyz_pose(
             float(PROMOTION_SOURCE_X_M),
             float(PROMOTION_SOURCE_Y_M),
-            source_level_z_m,
+            # move_to_pose descends to (pose_z + GRASP_Z_OFFSET), so subtract offset here
+            # to enforce an absolute 75 mm grasp target at the source.
+            float(PROMOTION_SOURCE_GRASP_TARGET_Z_M - GRASP_Z_OFFSET),
             yaw_deg=PROMOTION_SOURCE_YAW_DEG,
         )
         promotion_pawn_discard_pose = _robot_xyz_pose(
