@@ -1067,10 +1067,8 @@ def replace_promoted_pawn_with_source_queen(
         promotion_square_queen_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
         )
-        source_level_z_m = (
-            float(PROMOTION_SOURCE_Z_M)
-            if PROMOTION_SOURCE_Z_M is not None
-            else float(square_to_robot_pose(vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None)[2, 3])
+        source_level_z_m = float(
+            square_to_robot_pose(vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None)[2, 3]
         )
         graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
         forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
