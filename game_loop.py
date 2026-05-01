@@ -218,19 +218,7 @@ def prompt_continue_saved_game():
             print("Saved game deleted. Starting fresh.")
     return None, False
 
-
-# Global reference so the signal handler can access the board
 _chess_board_ref = [None]
-
-
-def _exit_handler(signum, frame):
-    save_game_state(_chess_board_ref[0])
-    sys.exit(0)
-
-
-# Register save-on-exit for SIGINT (Ctrl+C) and SIGTERM
-signal.signal(signal.SIGINT, _exit_handler)
-signal.signal(signal.SIGTERM, _exit_handler)
 
 
 def detect_castling(chess_board, removals, additions):
