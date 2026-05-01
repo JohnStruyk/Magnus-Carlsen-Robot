@@ -32,9 +32,6 @@ BOARD_CONFIG = {
     "grid_origin_offset": [0.0889, -0.0381] 
 }
 
-TAG_WIDTH_OFFSET = 17.5
-TAG_HEIGHT_OFFSET = -20.5
-
 # --- 2. TRANSFORMATION LOGIC ---
 
 def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
@@ -261,61 +258,3 @@ def display_board_state(warped_with_pieces, resized_raw):
     # cv2.waitKey(0)
     cv2.imshow('Warped with Piece Detection', warped_with_pieces)
     cv2.waitKey(0)
-
-
-def main() -> None:
-    """Interactive vision loop: show warped board and print inferred move between frames (dev parity)."""
-    from pupil_apriltags import Detector
-
-    from utils.zed_camera import ZedCamera
-
-    import chess_utils
-
-    zed = ZedCamera()
-    detector = Detector(families="tag36h11 tag25h9")
-    camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
-
-    prior_board_state = None
-
-    try:
-        while True:
-            cv_image = zed.image
-            board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
-
-            if board_state is None:
-                print("Board not detected, retrying...")
-                if resized_raw is not None:
-                    cv2.imshow("Robot Calibration", resized_raw)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-                continue
-
-            display_board_state(warped_with_pieces, resized_raw)
-            cv2.destroyAllWindows()
-
-            if prior_board_state is not None:
-                one_removals, two_removals, one_additions, two_additions = compare_board_states(
-                    prior_board_state, board_state
-                )
-                predicted_move = chess_utils.determine_move(
-                    one_removals, two_removals, one_additions, two_additions
-                )
-                print(f"one_removals: {one_removals}")
-                print(f"two_removals: {two_removals}")
-                print(f"one_additions: {one_additions}")
-                print(f"two_additions: {two_additions}")
-                print(f"predicted move: {predicted_move}")
-
-            prior_board_state = board_state
-
-            key_pressed = cv2.waitKey(1)
-            if key_pressed == ord("k"):
-                break
-
-    finally:
-        cv2.destroyAllWindows()
-        zed.close()
-
-
-if __name__ == "__main__":
-    main()

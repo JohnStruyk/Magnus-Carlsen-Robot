@@ -1,4 +1,7 @@
-"""Turn-processing logic for detected board-state changes."""
+"""Turn-processing logic for detected board-state changes.
+
+Human plays White (physical pieces); the robot only executes Black replies via ``try_robot_reply``.
+"""
 
 from __future__ import annotations
 
@@ -44,7 +47,7 @@ def process_detected_change(
         turn: Side to move.
         board_state: Latest vision board state.
         change: ``BoardChange`` object from ``move_patterns``.
-        try_robot_reply: Callback that executes robot turn and returns game_over bool.
+        try_robot_reply: Runs only when Black is to move: Stockfish + arm. Must not run for White.
     """
     one_removals = change.one_removals
     two_removals = change.two_removals
@@ -88,7 +91,7 @@ def process_detected_change(
             print(f"  ILLEGAL CASTLE ({exc}): please return pieces to original squares.")
             return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
 
-        if turn == chess.BLACK and try_robot_reply("Robot move failed"):
+        if turn == chess.BLACK and try_robot_reply("Black (robot) move failed"):
             return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=True)
         return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
 
@@ -100,7 +103,10 @@ def process_detected_change(
         return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
 
     move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
-    print(f"Change detected! UCI move: {move}")
+    if turn == chess.WHITE:
+        print(f"Recorded human (White) move: {move}")
+    else:
+        print(f"Detected board change (Black to move): {move}")
     describe_move(chess_board, (one_removals, two_removals), (one_additions, two_additions))
 
     try:
@@ -122,7 +128,7 @@ def process_detected_change(
         print_piece_return_instructions(chess_board, one_removals, two_removals)
         return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)
 
-    if turn == chess.BLACK and try_robot_reply("Robot move failed"):
+    if turn == chess.BLACK and try_robot_reply("Black (robot) move failed"):
         return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=True)
 
     return TurnProcessResult(turn=turn, prior_board_state=board_state, game_over=False)

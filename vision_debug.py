@@ -47,6 +47,7 @@ def main() -> None:
                 break
     finally:
         cv2.destroyAllWindows()
+        zed.close()
 
 
 if __name__ == "__main__":

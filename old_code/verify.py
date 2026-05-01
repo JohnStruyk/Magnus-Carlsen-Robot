@@ -2,9 +2,73 @@ import random
 import time
 
 import chess
+import cv2
+from xarm.wrapper import XArmAPI
 
-from pickup_board_piece import move_piece, capture_piece, stage_from_graveyard
+from pickup_board_piece import (
+    CHESSBOARD_TAG_FAMILY,
+    GRIPPER_LENGTH_M,
+    PLAYMAT_TAG_FAMILY,
+    ROBOT_IP_DEFAULT,
+    build_forward_entry_pose,
+    build_graveyard_pose,
+    build_vision_from_piece_continuity,
+    capture_piece,
+    hover_pose,
+    move_piece,
+    move_to_graveyard_mod180_joints,
+    normalize_piece_type,
+)
 from utils.zed_camera import ZedCamera
+
+
+def stage_from_graveyard(piece_type: str, zed: ZedCamera, robot_ip: str = ROBOT_IP_DEFAULT) -> None:
+    """Travel-only: graveyard hover → forward entry → graveyard (legacy helper for this script)."""
+    piece_name = normalize_piece_type(piece_type)
+    arm = None
+    arm_connected = False
+    graveyard_hover_pose = None
+    try:
+        img = zed.image
+        if img is None:
+            raise RuntimeError("No image from ZED.")
+        K = zed.camera_intrinsic
+        vision = build_vision_from_piece_continuity(img, K)
+        if vision is None:
+            raise RuntimeError(
+                f"Vision failed: need tags 0–3 on {PLAYMAT_TAG_FAMILY} and {CHESSBOARD_TAG_FAMILY}."
+            )
+        t_rb = vision.t_robot_board
+        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
+        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
+
+        arm = XArmAPI(robot_ip)
+        arm.connect()
+        arm_connected = True
+        arm.motion_enable(enable=True)
+        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
+        arm.set_mode(0)
+        arm.set_state(0)
+        hover_pose(arm, graveyard_hover_pose)
+        hover_pose(arm, forward_entry_pose)
+        hover_pose(arm, graveyard_hover_pose)
+    finally:
+        if arm is not None:
+            try:
+                arm.stop_lite6_gripper()
+            except Exception:
+                pass
+            if arm_connected:
+                time.sleep(0.2)
+                try:
+                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
+                except Exception:
+                    pass
+                try:
+                    arm.disconnect()
+                except Exception:
+                    pass
+        cv2.destroyAllWindows()
 
 
 def execute_robot_move_on_board(board: chess.Board, move: chess.Move, zed: ZedCamera) -> None:

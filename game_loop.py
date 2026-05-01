@@ -17,6 +17,7 @@ CAPTURE_INTERVAL = 5  # seconds between captures
 # Fill this in if you are starting from a known non-standard position.
 CURRENT_FEN = ""
 
+# Human plays White; the arm only executes Black (Stockfish). ``chess_board.turn`` is the source of truth.
 _chess_board_ref = [None]
 
 
@@ -30,14 +31,18 @@ def main():
 
     # --- Saved game check ---
     chess_board, resumed = prompt_continue_saved_game()
-    turn = chess_board.turn if resumed else chess.WHITE
-    resume_robot_pending = bool(resumed and turn == chess.BLACK)
+    resume_robot_pending = bool(
+        resumed and chess_board is not None and chess_board.turn == chess.BLACK
+    )
     _chess_board_ref[0] = chess_board  # keep signal handler in sync
 
     def try_robot_reply(error_prefix: str):
-        nonlocal turn, prior_board_state, chess_board
+        nonlocal prior_board_state, chess_board
+        if chess_board is None or chess_board.turn != chess.BLACK:
+            print(f"  {error_prefix}: skipped — not Black to move (robot never plays White).")
+            return False
         try:
-            turn, prior_board_state, game_over = execute_robot_reply_turn(
+            _, prior_board_state, game_over = execute_robot_reply_turn(
                 chess_board, zed, detector, camera_intrinsic, print_game_over_banner
             )
             _chess_board_ref[0] = chess_board
@@ -74,21 +79,20 @@ def main():
                     if change.changed:
                         result = process_detected_change(
                             chess_board,
-                            turn,
+                            chess_board.turn,
                             board_state,
                             change,
                             try_robot_reply,
                             print_game_over_banner,
                         )
-                        turn = result.turn
                         prior_board_state = result.prior_board_state
                         _chess_board_ref[0] = chess_board
                         if result.game_over:
                             break
                     else:
-                        # Resume recovery
-                        if turn == chess.BLACK:
-                            game_over = try_robot_reply("Robot move on resume failed")
+                        # Black to move and board unchanged: play or retry Stockfish/arm (e.g. resume or failed attempt).
+                        if chess_board.turn == chess.BLACK:
+                            game_over = try_robot_reply("Black (robot) move failed")
                             resume_robot_pending = False
                             if game_over:
                                 break

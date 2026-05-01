@@ -1,4 +1,4 @@
-"""Robot move execution helpers used by the game loop."""
+"""Robot move execution helpers used by the game loop (Black only — human plays White)."""
 
 from __future__ import annotations
 
@@ -16,6 +16,11 @@ from pickup_board_piece import (
 from stockfish_int import get_best_move
 
 
+def _assert_black_to_move(chess_board: chess.Board, context: str) -> None:
+    if chess_board.turn != chess.BLACK:
+        raise RuntimeError(f"{context}: robot only moves Black; White to move — refusing arm motion.")
+
+
 def count_white_captures(chess_board: chess.Board) -> int:
     """Return how many white pieces have been captured from the initial 16."""
     white_pieces_on_board = sum(1 for piece in chess_board.piece_map().values() if piece.color == chess.WHITE)
@@ -23,9 +28,17 @@ def count_white_captures(chess_board: chess.Board) -> int:
 
 
 def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move, zed) -> str:
-    """Execute one physical move (normal, capture, castling, promotion replacement)."""
+    """Execute one physical move for the side to move (must be Black)."""
+    _assert_black_to_move(chess_board, "execute_robot_move_on_board")
+    from_sq = robot_move.from_square
+    piece = chess_board.piece_at(from_sq)
+    if piece is None or piece.color != chess.BLACK:
+        raise RuntimeError(
+            f"Refusing arm motion: expected Black piece on {chess.square_name(from_sq)}, "
+            "robot never moves White."
+        )
     move_string = robot_move.uci()
-    print(f"Sending move {move_string} to robot arm...")
+    print(f"Sending Black move {move_string} to robot arm...")
 
     if chess_board.is_castling(robot_move):
         king_from_sq = robot_move.from_square
@@ -49,7 +62,6 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
         move_piece(rook_piece.symbol(), chess.square_name(rook_from_sq), chess.square_name(rook_to_sq), zed)
         return move_string
 
-    from_sq = robot_move.from_square
     to_sq = robot_move.to_square
     from_piece = chess_board.piece_at(from_sq)
     to_piece = chess_board.piece_at(to_sq)
@@ -110,20 +122,22 @@ def execute_robot_reply_turn(
     detector,
     camera_intrinsic,
     on_game_over: Callable[[chess.Board], None],
-) -> Tuple[int, object, bool]:
-    """Execute engine move for black and return ``(turn, prior_board_state, game_over)``."""
+) -> Tuple[chess.Color, object, bool]:
+    """Ask Stockfish for Black's move, execute it on the arm, return ``(side_to_move_after, prior_board_state, game_over)``."""
+    _assert_black_to_move(chess_board, "execute_robot_reply_turn")
     robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
+    if chess_board.color_at(robot_move.from_square) != chess.BLACK:
+        raise RuntimeError("Engine suggested a non-Black move; robot never plays White.")
     move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
     chess_board.push_uci(move_string)
 
-    turn = chess.WHITE
     if chess_board.is_check():
         checked_side = "White" if chess_board.turn == chess.WHITE else "Black"
         print(f"Check: {checked_side} is in check.")
     if chess_board.is_game_over(claim_draw=True):
         on_game_over(chess_board)
-        return turn, capture_stable_board_state(zed, detector, camera_intrinsic), True
+        return chess_board.turn, capture_stable_board_state(zed, detector, camera_intrinsic), True
 
     prior_board_state = capture_stable_board_state(zed, detector, camera_intrinsic)
-    print(f"Robot played {move_string}. White's turn.")
-    return turn, prior_board_state, False
+    print(f"Robot (Black) played {move_string}. Human (White) to move.")
+    return chess_board.turn, prior_board_state, False

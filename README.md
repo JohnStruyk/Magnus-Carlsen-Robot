@@ -19,6 +19,7 @@ Computer-vision + chess-engine + xArm integration for a physical chess robot.
 - `chess_utils.py`: Board-diff to candidate move conversion helpers.
 - `camera_setup.py`: Live tag-family diagnostics.
 - `manipulation_test.py`: Repeatable pick/place stress-test script.
+- `pickup_cli.py`: One-off pick / capture from the command line.
 - `utils/zed_camera.py`: ZED camera wrapper.
 - `utils/vis_utils.py`: Visualization helpers.
 
@@ -28,15 +29,13 @@ Computer-vision + chess-engine + xArm integration for a physical chess robot.
 2. Detect board + piece state from AprilTags/warped board image.
 3. Compare with previous board state to infer a candidate move.
 4. Validate move legality with `python-chess`.
-5. If legal human move: update board, ask Stockfish for reply, execute robot move.
-6. Refresh visual baseline after robot move to avoid replaying robot actions.
+5. **Human plays White** — legal White moves are recorded on the internal board only; the arm never moves White pieces.
+6. **Robot plays Black** — after each recorded White move, Stockfish chooses Black’s reply and the arm executes only that Black move.
+7. Refresh the vision baseline after the robot moves so the next diff is human-only.
 
 ## Configuration hotspots
 
-- **Board geometry / targeting:** `pickup_board_piece.py`
-  - `BOARD_TOTAL_SIZE_IN`
-  - `CHESS_SQUARE_SIZE_M`
-  - `HAND_EYE_XYZ_BIAS_M`
+- **Board geometry / targeting:** `piece_continuity.py` (`BOARD_CONFIG` / `square_size`), `pickup_board_piece.py` (`HAND_EYE_XYZ_BIAS_M`, grasp offsets)
 - **Motion safety + approach:** `pickup_board_piece.py`
   - `SAFE_Z`, `MIN_TOOL_Z_M`
   - `FORWARD_ENTRY_BOARD_FRACTION`, `MAX_FORWARD_ENTRY_STEP_M`
@@ -74,6 +73,11 @@ Install Stockfish binary and set:
   - `python calibrate_tags.py`
 - Run manipulation stress test:
   - `python manipulation_test.py`
+- One-off pick or capture (same motion stack as the game loop):
+  - `python pickup_cli.py --piece-type pawn --from-square e2 --to-square e4`
+  - Add `--captured-piece-type` for a capture sequence.
+- Debug vision / move diffs (press `k` to quit):
+  - `python vision_debug.py`
 
 ## Notes
 
@@ -93,7 +97,7 @@ Files and packages the runtime depends on, including common transitive local mod
 | `pickup_board_piece.py` | Robot arm pick-and-place, capture logic |
 | `calibrate_tags.py` | AprilTag detection, camera-to-robot transform (used by `pickup_board_piece`) |
 | `utils/zed_camera.py` | ZED camera wrapper (threaded image + point cloud capture) |
-| `utils/vis_utils.py` | Pose axis drawing helpers (used by `pickup_board_piece` and `calibrate_tags`) |
+| `utils/vis_utils.py` | Pose axis drawing helpers (used by `calibrate_tags`) |
 
 ### Third-party packages
 

@@ -8,7 +8,6 @@ arm XY aligned with the rectified grid even when the analytic tag grid differs s
 
 from __future__ import annotations
 
-import argparse
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,13 +20,9 @@ from xarm.wrapper import XArmAPI
 from calibrate_tags import (
     CHESSBOARD_TAG_FAMILY,
     PLAYMAT_TAG_FAMILY,
-    TAG_SIZE,
     best_tag_per_id_0_3,
     detect_playmat_and_chessboard_tags,
-    draw_dual_family_tag_overlays,
     get_transform_camera_robot_from_tags,
-    resize_for_preview,
-    to_bgr_display,
 )
 from piece_continuity import (
     BOARD_CONFIG,
@@ -36,21 +31,14 @@ from piece_continuity import (
     get_board_centers_local,
     get_warped,
 )
-from utils.vis_utils import draw_pose_axes
 from utils.zed_camera import ZedCamera
 
 # ---------------------------------------------------------------------------
 # Board / calibration (override in module scope if measured values differ)
 # ---------------------------------------------------------------------------
 BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
-CHESS_SQUARE_SIZE_M: Optional[float] = None
 HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
-# Hardcoded board geometry: measured total board footprint.
-BOARD_TOTAL_SIZE_IN = 13.82
-BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
-BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
-# Keep homography-ray centers for safety/reachability while still using the
-# hardcoded 14in square size in board config.
+# If True, square centers use tag-chain fallback only (skip homography-ray refinement).
 USE_HARDCODED_SQUARE_CENTERS = False
 
 # ---------------------------------------------------------------------------
@@ -106,16 +94,6 @@ PROMOTION_SOURCE_GRASP_TARGET_Z_M = 0.075
 # Pawn discard spot: offset from source in +X (meters), ~5 cm toward board.
 PROMOTION_PAWN_DISCARD_X_OFFSET_M = 0.05
 
-# Chesspiece physical heights (m) — optional reference; grasp uses ``GRASP_Z_OFFSET_*_M`` below.
-PIECE_CONFIG = {
-    "king_height": 0.0950214,
-    "queen_height": 0.075184,
-    "bishop_height": 0.0638048,
-    "knight_height": 0.0569976,
-    "rook_height": 0.0455422,
-    "pawn_height": 0.0445008,
-}
-
 # Static robot-base +Z offset (meters) added at pick/place for each piece — edit these only.
 GRASP_Z_OFFSET_PAWN_M = 0.045
 GRASP_Z_OFFSET_KNIGHT_M = 0.05
@@ -132,10 +110,6 @@ PIECE_GRASP_Z_OFFSET_M = {
     "queen": GRASP_Z_OFFSET_QUEEN_M,
     "king": GRASP_Z_OFFSET_KING_M,
 }
-
-# Preview: FROM = yellow, TO = blue (BGR)
-_COLOR_FROM_BGR = (0, 255, 255)
-_COLOR_TO_BGR = (255, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -187,14 +161,8 @@ def normalize_piece_type(piece_type: str) -> str:
 
 
 def _board_config_for_pickup() -> dict:
-    """``BOARD_CONFIG`` with optional measured tag edge / square size overrides."""
-    cfg = {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
-    # Use ``BOARD_CONFIG["square_size"]`` from ``piece_continuity`` (aligned with dev calibration).
-    # if CHESS_SQUARE_SIZE_M is not None:
-    #     cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
-    # else:
-    #     cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
-    return cfg
+    """``piece_continuity.BOARD_CONFIG`` with pickup tag-edge override."""
+    return {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
 
 
 # =============================================================================
@@ -411,112 +379,6 @@ def build_vision_from_piece_continuity(
 
 
 # =============================================================================
-# Preview (OpenCV)
-# =============================================================================
-
-
-def _cell_corners_warped(row: int, col: int, square_px: int) -> np.ndarray:
-    """One cell as 4×1×2 float32 corners in warped coordinates (TL, TR, BR, BL)."""
-    s = float(square_px)
-    return np.array(
-        [
-            [[col * s, row * s], [(col + 1) * s, row * s], [(col + 1) * s, (row + 1) * s], [col * s, (row + 1) * s]]
-        ],
-        dtype=np.float32,
-    )
-
-
-def _cell_quad_in_raw_image(
-    H_warp_to_img: np.ndarray, row: int, col: int, square_px: int
-) -> np.ndarray:
-    """Project warped cell quad to the original camera image (4×1×2)."""
-    return cv2.perspectiveTransform(_cell_corners_warped(row, col, square_px), H_warp_to_img)
-
-
-def _blend_quad(bgr: np.ndarray, quad_xy: np.ndarray, color_bgr: Tuple[int, int, int], alpha: float = 0.36) -> None:
-    """Draw a semi-transparent filled quad + outline on ``bgr`` (in place)."""
-    pts = np.round(quad_xy.reshape(4, 2)).astype(np.int32)
-    layer = bgr.copy()
-    cv2.fillPoly(layer, [pts], color_bgr)
-    cv2.addWeighted(layer, alpha, bgr, 1.0 - alpha, 0.0, bgr)
-    cv2.polylines(bgr, [pts], True, color_bgr, 3, cv2.LINE_AA)
-
-
-def show_preview(
-    raw_img: np.ndarray,
-    warped: np.ndarray,
-    camera_intrinsic: np.ndarray,
-    from_row: int,
-    from_col: int,
-    to_row: int,
-    to_col: int,
-    vision_meta: Optional[Dict[str, Any]] = None,
-    from_square: Optional[str] = None,
-    to_square: Optional[str] = None,
-) -> bool:
-    """
-    Show warped board (FROM yellow / TO blue) and optional raw view with tag overlays +
-    projected quads. Return ``True`` if user pressed ``k`` to confirm execution.
-    """
-    spx = warped.shape[0] // 8
-    vis_warp = warped.copy()
-
-    fx0, fy0 = from_col * spx, from_row * spx
-    fx1, fy1 = fx0 + spx, fy0 + spx
-    tx0, ty0 = to_col * spx, to_row * spx
-    tx1, ty1 = tx0 + spx, ty0 + spx
-    cv2.rectangle(vis_warp, (fx0, fy0), (fx1, fy1), _COLOR_FROM_BGR, 3)
-    cv2.rectangle(vis_warp, (tx0, ty0), (tx1, ty1), _COLOR_TO_BGR, 3)
-    flab = f"FROM {from_square}" if from_square else "FROM"
-    tlab = f"TO {to_square}" if to_square else "TO"
-    cv2.putText(vis_warp, flab, (fx0 + 4, fy0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, _COLOR_FROM_BGR, 2)
-    cv2.putText(vis_warp, tlab, (tx0 + 4, ty0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, _COLOR_TO_BGR, 2)
-
-    max_dim = 900
-    h, w = vis_warp.shape[:2]
-    scale = min(max_dim / float(max(h, w)), 1.0)
-    if scale < 1.0:
-        vis_warp = cv2.resize(vis_warp, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-    if vision_meta and vision_meta.get("playmat_tags") is not None:
-        tag_vis = to_bgr_display(raw_img)
-        if tag_vis is not None:
-            tag_vis = tag_vis.copy()
-            draw_dual_family_tag_overlays(
-                tag_vis, vision_meta["playmat_tags"], vision_meta["chessboard_tags"]
-            )
-            tcr = vision_meta.get("t_cam_robot")
-            if tcr is not None:
-                draw_pose_axes(tag_vis, camera_intrinsic, tcr, size=TAG_SIZE)
-            H_wi = vision_meta.get("H_warp_to_img")
-            spx_meta = int(vision_meta.get("square_px", spx))
-            if H_wi is not None:
-                _blend_quad(tag_vis, _cell_quad_in_raw_image(H_wi, to_row, to_col, spx_meta), _COLOR_TO_BGR, 0.32)
-                _blend_quad(tag_vis, _cell_quad_in_raw_image(H_wi, from_row, from_col, spx_meta), _COLOR_FROM_BGR, 0.36)
-                cf = _cell_quad_in_raw_image(H_wi, from_row, from_col, spx_meta).reshape(4, 2).mean(axis=0)
-                ct = _cell_quad_in_raw_image(H_wi, to_row, to_col, spx_meta).reshape(4, 2).mean(axis=0)
-                cv2.putText(
-                    tag_vis, flab, (max(4, int(cf[0]) - 40), max(22, int(cf[1]))),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, _COLOR_FROM_BGR, 2, cv2.LINE_AA,
-                )
-                cv2.putText(
-                    tag_vis, tlab, (max(4, int(ct[0]) - 40), max(22, int(ct[1]))),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, _COLOR_TO_BGR, 2, cv2.LINE_AA,
-                )
-            line = f"pickup: {vision_meta.get('split_msg', '')} | yellow=FROM blue=TO (raw = arm targets)"
-            for dy, color, th in ((2, (255, 255, 255), 2), (0, (0, 200, 0), 1)):
-                cv2.putText(tag_vis, line, (12, 86 + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, th, cv2.LINE_AA)
-            cv2.namedWindow("pickup: raw camera (FROM yellow / TO blue)", cv2.WINDOW_NORMAL)
-            cv2.imshow("pickup: raw camera (FROM yellow / TO blue)", resize_for_preview(tag_vis))
-
-    cv2.namedWindow("Warped board", cv2.WINDOW_NORMAL)
-    cv2.imshow("Warped board", vis_warp)
-    key = cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    return key == ord("k")
-
-
-# =============================================================================
 # Arm trajectories
 # =============================================================================
 
@@ -704,9 +566,8 @@ def move_piece(
     to_square: str,
     zed: ZedCamera,
     robot_ip: str = ROBOT_IP_DEFAULT,
-    preview: bool = False,
 ) -> None:
-    """Capture one frame, run vision, optionally preview, then pick at ``from_square`` and place at ``to_square``."""
+    """Capture one frame, run vision, then pick at ``from_square`` and place at ``to_square``."""
     piece_name = normalize_piece_type(piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
     to_row, to_col = algebraic_to_row_col(to_square)
@@ -727,28 +588,6 @@ def move_piece(
                 f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
             )
 
-        execute = True
-        if preview:
-            execute = show_preview(
-                img,
-                vision.warped,
-                K,
-                from_row,
-                from_col,
-                to_row,
-                to_col,
-                vision_meta={
-                    "playmat_tags": vision.playmat_tags,
-                    "chessboard_tags": vision.chessboard_tags,
-                    "t_cam_robot": vision.t_cam_robot,
-                    "split_msg": vision.split_msg,
-                    "H_warp_to_img": vision.H_warp_to_img,
-                    "square_px": vision.square_px,
-                },
-                from_square=from_square,
-                to_square=to_square,
-            )
-
         if int(vision.board_state[from_row, from_col]) == 0:
             raise RuntimeError(f"Source square {from_square} appears empty in vision.")
 
@@ -763,9 +602,6 @@ def move_piece(
         forward_entry_pose = build_forward_entry_pose(
             vision.robot_frame_centers, graveyard_hover_pose
         )
-
-        if not execute:
-            return
 
         arm = XArmAPI(robot_ip)
         arm.connect()
@@ -801,68 +637,6 @@ def move_piece(
         cv2.destroyAllWindows()
 
 
-def move_piece_three_params(piece_type: str, from_square: str, to_square: str) -> None:
-    """Thin wrapper for callers that only pass ``(piece_type, from_square, to_square)``."""
-    move_piece(piece_type, from_square, to_square)
-
-
-def stage_from_graveyard(
-    piece_type: str,
-    zed: ZedCamera,
-    robot_ip: str = ROBOT_IP_DEFAULT,
-) -> None:
-    """
-    Perform a safe travel-only staging motion:
-    graveyard hover -> forward entry hover -> graveyard hover.
-    """
-    piece_name = normalize_piece_type(piece_type)
-    arm: Optional[XArmAPI] = None
-    arm_connected = False
-    graveyard_hover_pose: Optional[np.ndarray] = None
-    try:
-        img = zed.image
-        if img is None:
-            raise RuntimeError("No image from ZED.")
-        K = zed.camera_intrinsic
-        vision = build_vision_from_piece_continuity(img, K)
-        if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
-        t_rb = vision.t_robot_board
-        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
-        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
-
-        arm = XArmAPI(robot_ip)
-        arm.connect()
-        arm_connected = True
-        arm.motion_enable(enable=True)
-        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
-        arm.set_mode(0)
-        arm.set_state(0)
-        hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, forward_entry_pose)
-        hover_pose(arm, graveyard_hover_pose)
-    finally:
-        if arm is not None:
-            try:
-                arm.stop_lite6_gripper()
-            except Exception:
-                pass
-            if arm_connected:
-                time.sleep(0.2)
-                try:
-                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
-                except Exception:
-                    pass
-                try:
-                    arm.disconnect()
-                except Exception:
-                    pass
-        cv2.destroyAllWindows()
-
-
 def _robot_xyz_pose(
     x_m: float,
     y_m: float,
@@ -874,157 +648,6 @@ def _robot_xyz_pose(
     pose[:3, :3] = Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix().astype(np.float32)
     pose[:3, 3] = np.array([x_m, y_m, z_m], dtype=np.float32)
     return pose
-
-
-def remove_piece_to_graveyard(
-    piece_type: str,
-    from_square: str,
-    zed: ZedCamera,
-    capture_count: int = 0,
-    robot_ip: str = ROBOT_IP_DEFAULT,
-) -> None:
-    """Pick a piece from board square and place it in graveyard."""
-    piece_name = normalize_piece_type(piece_type)
-    from_row, from_col = algebraic_to_row_col(from_square)
-
-    arm: Optional[XArmAPI] = None
-    arm_connected = False
-    graveyard_hover_pose: Optional[np.ndarray] = None
-    try:
-        img = zed.image
-        if img is None:
-            raise RuntimeError("No image from ZED.")
-        K = zed.camera_intrinsic
-        vision = build_vision_from_piece_continuity(img, K)
-        if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
-
-        t_rb = vision.t_robot_board
-        from_pose = square_to_robot_pose(
-            vision.robot_frame_centers, from_row, from_col, t_rb, piece_name=piece_name
-        )
-        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, piece_name)
-        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
-        graveyard_pose = square_to_robot_pose(
-            vision.robot_frame_centers, 0, 7, t_rb, piece_name=piece_name
-        )
-        graveyard_pose[0, 3] -= 0.15
-        offset_x, offset_y = capture_offsets(capture_count, 0.05)
-        graveyard_pose[0, 3] += offset_x
-        graveyard_pose[1, 3] += offset_y
-
-        arm = XArmAPI(robot_ip)
-        arm.connect()
-        arm_connected = True
-        arm.motion_enable(enable=True)
-        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
-        arm.set_mode(0)
-        arm.set_state(0)
-
-        hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, forward_entry_pose)
-        pickup_pose(arm, from_pose, piece_name=piece_name)
-        hover_pose(arm, forward_entry_pose)
-        hover_pose(arm, graveyard_hover_pose)
-        place_pose(arm, graveyard_pose, piece_name=piece_name)
-        hover_pose(arm, forward_entry_pose)
-        hover_pose(arm, graveyard_hover_pose)
-    finally:
-        if arm is not None:
-            try:
-                arm.stop_lite6_gripper()
-            except Exception:
-                pass
-            if arm_connected:
-                time.sleep(0.2)
-                try:
-                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
-                except Exception:
-                    pass
-                try:
-                    arm.disconnect()
-                except Exception:
-                    pass
-        cv2.destroyAllWindows()
-
-
-def place_promotion_queen_from_source(
-    to_square: str,
-    zed: ZedCamera,
-    robot_ip: str = ROBOT_IP_DEFAULT,
-) -> None:
-    """Pick a queen from a fixed promotion source pose and place it on promotion square."""
-    if PROMOTION_SOURCE_X_M is None or PROMOTION_SOURCE_Y_M is None:
-        raise RuntimeError(
-            "Set PROMOTION_SOURCE_X_M and PROMOTION_SOURCE_Y_M in pickup_board_piece.py "
-            "before using robot promotions."
-        )
-
-    to_row, to_col = algebraic_to_row_col(to_square)
-    arm: Optional[XArmAPI] = None
-    arm_connected = False
-    graveyard_hover_pose: Optional[np.ndarray] = None
-    try:
-        img = zed.image
-        if img is None:
-            raise RuntimeError("No image from ZED.")
-        K = zed.camera_intrinsic
-        vision = build_vision_from_piece_continuity(img, K)
-        if vision is None:
-            raise RuntimeError(
-                f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
-                f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
-
-        t_rb = vision.t_robot_board
-        queen_to_pose = square_to_robot_pose(
-            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
-        )
-        graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
-        forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
-        promotion_source_pose = _robot_xyz_pose(
-            float(PROMOTION_SOURCE_X_M),
-            float(PROMOTION_SOURCE_Y_M),
-            float(PROMOTION_SOURCE_Z_M),
-            yaw_deg=PROMOTION_SOURCE_YAW_DEG,
-        )
-
-        arm = XArmAPI(robot_ip)
-        arm.connect()
-        arm_connected = True
-        arm.motion_enable(enable=True)
-        arm.set_tcp_offset([0, 0, GRIPPER_LENGTH_M * 1000.0, 0, 0, 0])
-        arm.set_mode(0)
-        arm.set_state(0)
-
-        hover_pose(arm, graveyard_hover_pose)
-        hover_pose(arm, promotion_source_pose)
-        pickup_pose(arm, promotion_source_pose, piece_name="queen")
-        hover_pose(arm, promotion_source_pose)
-        hover_pose(arm, forward_entry_pose)
-        place_pose(arm, queen_to_pose, piece_name="queen")
-        hover_pose(arm, forward_entry_pose)
-        hover_pose(arm, graveyard_hover_pose)
-    finally:
-        if arm is not None:
-            try:
-                arm.stop_lite6_gripper()
-            except Exception:
-                pass
-            if arm_connected:
-                time.sleep(0.2)
-                try:
-                    move_to_graveyard_mod180_joints(arm, graveyard_hover_pose)
-                except Exception:
-                    pass
-                try:
-                    arm.disconnect()
-                except Exception:
-                    pass
-        cv2.destroyAllWindows()
 
 
 def replace_promoted_pawn_with_source_queen(
@@ -1144,9 +767,8 @@ def capture_piece(
     zed: ZedCamera,
     capture_count: int = 0,
     robot_ip: str = ROBOT_IP_DEFAULT,
-    preview: bool = False,
 ) -> None:
-    """Capture one frame, run vision, optionally preview, then pick at ``from_square`` and place at ``to_square``."""
+    """Capture one frame, run vision, then execute capture sequence (remove victim, move attacker)."""
     capturing_piece_name = normalize_piece_type(capturing_piece_type)
     captured_piece_name = normalize_piece_type(captured_piece_type)
     from_row, from_col = algebraic_to_row_col(from_square)
@@ -1167,28 +789,6 @@ def capture_piece(
             raise RuntimeError(
                 f"Vision failed: need four tags ids 0–3 on {PLAYMAT_TAG_FAMILY} (playmat) "
                 f"and four on {CHESSBOARD_TAG_FAMILY} (chessboard). See console above."
-            )
-
-        execute = True
-        if preview:
-            execute = show_preview(
-                img,
-                vision.warped,
-                K,
-                from_row,
-                from_col,
-                to_row,
-                to_col,
-                vision_meta={
-                    "playmat_tags": vision.playmat_tags,
-                    "chessboard_tags": vision.chessboard_tags,
-                    "t_cam_robot": vision.t_cam_robot,
-                    "split_msg": vision.split_msg,
-                    "H_warp_to_img": vision.H_warp_to_img,
-                    "square_px": vision.square_px,
-                },
-                from_square=from_square,
-                to_square=to_square,
             )
 
         if int(vision.board_state[from_row, from_col]) == 0:
@@ -1217,9 +817,6 @@ def capture_piece(
         capturing_to_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=capturing_piece_name
         )
-
-        if not execute:
-            return
 
         arm = XArmAPI(robot_ip)
         arm.connect()
@@ -1258,28 +855,3 @@ def capture_piece(
                 except Exception:
                     pass
         cv2.destroyAllWindows()
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Pick and place a chess piece (ZED + AprilTags + Lite6).")
-    p.add_argument("--piece-type", required=True, help="pawn/knight/bishop/rook/queen/king or P/N/B/R/Q/K")
-    p.add_argument("--from-square", required=True, help="Source square, e.g. e5")
-    p.add_argument("--to-square", required=True, help="Destination square, e.g. e4")
-    p.add_argument("--captured-piece-type", required=False, help="pawn/knight/bishop/rook/queen/king or P/N/B/R/Q/K")
-    p.add_argument("--robot-ip", default=ROBOT_IP_DEFAULT)
-    p.add_argument("--preview", action="store_true", help="Show overlays; press 'k' to execute.")
-    return p.parse_args()
-
-
-def main() -> None:
-    zed = ZedCamera()
-    a = parse_args()
-    if a.captured_piece_type:
-        capture_piece(a.piece_type, a.captured_piece_type, a.from_square, a.to_square, zed, 1)
-    else:
-        move_piece(a.piece_type, a.from_square, a.to_square, zed, robot_ip=a.robot_ip, preview=a.preview)
-    zed.close()
-
-
-if __name__ == "__main__":
-    main()
