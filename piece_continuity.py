@@ -1,8 +1,5 @@
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
-from utils.zed_camera import ZedCamera
-import chess_utils
 
 # --- 1. CONFIGURATION ---
 
@@ -34,10 +31,6 @@ BOARD_CONFIG = {
     #"grid_origin_offset": [0.03, -0.008] 
     "grid_origin_offset": [0.0889, -0.0381] 
 }
-
-TAG_WIDTH_OFFSET = 17.5
-TAG_HEIGHT_OFFSET = -20.5
-
 
 # --- 2. TRANSFORMATION LOGIC ---
 
@@ -96,6 +89,7 @@ def get_board_centers_local(config):
     return np.array(grid_pts, dtype=np.float32)
 
 def get_warped(img, b_rvec, b_tvec, intrix, square_px):
+    """Warp board region into a fixed 8x8 top-down image."""
     W = BOARD_CONFIG["grid_size"][1] * square_px
     H = BOARD_CONFIG["grid_size"][0] * square_px
 
@@ -149,6 +143,7 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     return warped, img_corners, H_mat
 
 def detect_pieces(warped, square_px):
+    """Classify each warped square as empty/black(1)/white(2) by color."""
     board_state = np.zeros((8,8),dtype=int)
 
     for row in range(8):
@@ -199,7 +194,7 @@ def draw_piece_detected(warped, board_state, square_px):
     return overlay
 
 def compare_board_states(old_state, new_state):
-
+    """Return per-color removals/additions between two board-state grids."""
     one_removals = np.argwhere((old_state == 1) & (new_state != 1))
     one_additions = np.argwhere((old_state != 1) & (new_state == 1))
 
@@ -236,7 +231,7 @@ def get_board_state(cv_image, detector, camera_intrinsic):
     # print(f"Captured {len(tags)} tags.")
     # print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
     if len(tags) < 4:
-        print("Vision Error: only captured {len(tags)} tags.")
+        print(f"Vision Error: only captured {len(tags)} tags.")
 
     output_square_px = 100
     warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
@@ -263,50 +258,3 @@ def display_board_state(warped_with_pieces, resized_raw):
     # cv2.waitKey(0)
     cv2.imshow('Warped with Piece Detection', warped_with_pieces)
     cv2.waitKey(0)
-
-
-# --- 3. MAIN ---
-
-def main():
-    zed = ZedCamera()
-    detector = Detector(families='tag36h11 tag25h9')
-    camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
-
-    prior_board_state = None
-
-    try:
-        while True:
-            cv_image = zed.image
-            board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
-
-            if board_state is None:
-                print("Board not detected, retrying...")
-                if resized_raw is not None:
-                    cv2.imshow('Robot Calibration', resized_raw)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-                continue
-
-            display_board_state(warped_with_pieces, resized_raw)
-            cv2.destroyAllWindows()
-
-            if prior_board_state is not None:
-                one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
-                predicted_move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
-                print(f"one_removals: {one_removals}")
-                print(f"two_removals: {two_removals}")
-                print(f"one_additions: {one_additions}")
-                print(f"two_additions: {two_additions}")
-                print(f"predicted move: {predicted_move}")
-
-            prior_board_state = board_state
-
-            key_pressed = cv2.waitKey(1)
-            if key_pressed == ord('k'):
-                break
-
-    finally:
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()

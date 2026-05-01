@@ -50,7 +50,7 @@ BOARD_TOTAL_SIZE_IN = 13.82
 BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
 BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
 # Keep homography-ray centers for safety/reachability while still using the
-# hardcoded 14in square size in board config.
+# measured board size for square-size calibration.
 USE_HARDCODED_SQUARE_CENTERS = False
 
 # ---------------------------------------------------------------------------
