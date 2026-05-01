@@ -458,7 +458,7 @@ def execute_robot_move_with_retry(chess_board, robot_move, zed):
                 f"(source {from_name} -> destination {to_name}): {e}"
             )
             attempt += 1
-            time.sleep(0.5)
+            time.sleep(3)
             continue
 
 
