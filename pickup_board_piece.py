@@ -1067,23 +1067,23 @@ def replace_promoted_pawn_with_source_queen(
         promotion_square_queen_pose = square_to_robot_pose(
             vision.robot_frame_centers, to_row, to_col, t_rb, piece_name="queen"
         )
-        # Use board-level Z (same baseline as normal board pieces), not old cup-height Z.
-        promotion_square_board_pose = square_to_robot_pose(
-            vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None
+        source_level_z_m = (
+            float(PROMOTION_SOURCE_Z_M)
+            if PROMOTION_SOURCE_Z_M is not None
+            else float(square_to_robot_pose(vision.robot_frame_centers, to_row, to_col, t_rb, piece_name=None)[2, 3])
         )
-        board_level_z_m = float(promotion_square_board_pose[2, 3])
         graveyard_hover_pose = build_graveyard_pose(vision.robot_frame_centers, t_rb, "queen")
         forward_entry_pose = build_forward_entry_pose(vision.robot_frame_centers, graveyard_hover_pose)
         promotion_source_pose = _robot_xyz_pose(
             float(PROMOTION_SOURCE_X_M),
             float(PROMOTION_SOURCE_Y_M),
-            board_level_z_m,
+            source_level_z_m,
             yaw_deg=PROMOTION_SOURCE_YAW_DEG,
         )
         promotion_pawn_discard_pose = _robot_xyz_pose(
             float(PROMOTION_SOURCE_X_M + PROMOTION_PAWN_DISCARD_X_OFFSET_M),
             float(PROMOTION_SOURCE_Y_M),
-            board_level_z_m,
+            source_level_z_m,
             yaw_deg=PROMOTION_SOURCE_YAW_DEG,
         )
 
