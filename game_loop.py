@@ -139,7 +139,8 @@ def explain_illegal_move(chess_board, move_uci):
 
     if from_piece is None:
         return (
-            f"No piece exists on {from_name}. In chess terms, you attempted to move "
+            f"Illegal move {move_uci}: source square {from_name} is empty. "
+            f"No piece exists on {from_name}, so the move to {to_name} cannot be made."
             "from an empty square."
         )
 
@@ -147,22 +148,23 @@ def explain_illegal_move(chess_board, move_uci):
         wrong = "white" if from_piece.color == chess.WHITE else "black"
         right = "white" if side_to_move == chess.WHITE else "black"
         return (
-            f"Turn violation: piece on {from_name} is {wrong}, but it is {right} to move. "
+            f"Illegal move {move_uci}: turn violation at source {from_name}. "
+            f"Piece on {from_name} is {wrong}, but it is {right} to move. "
             "You can only move your own color on your turn."
         )
 
     if to_piece is not None and to_piece.color == side_to_move:
         side = "white" if side_to_move == chess.WHITE else "black"
         return (
-            f"Illegal destination: {to_name} is occupied by another {side} piece. "
+            f"Illegal move {move_uci}: destination square {to_name} is blocked by another {side} piece. "
             "A move cannot capture or replace a friendly piece."
         )
 
     if move not in chess_board.pseudo_legal_moves:
         piece_name = chess.piece_name(from_piece.piece_type)
         return (
-            f"Piece-movement rule violation: a {piece_name} cannot legally move "
-            f"from {from_name} to {to_name} in this position."
+            f"Illegal move {move_uci}: piece-rule violation from {from_name} to {to_name}. "
+            f"A {piece_name} cannot legally move from {from_name} to {to_name} in this position."
         )
 
     # Pseudo-legal but not legal usually means king safety issue.
@@ -170,15 +172,83 @@ def explain_illegal_move(chess_board, move_uci):
     test_board.push(move)
     side_name = "white" if side_to_move == chess.WHITE else "black"
     if test_board.is_check():
+        king_sq = test_board.king(side_to_move)
+        king_name = chess.square_name(king_sq) if king_sq is not None else "unknown"
+        attacker_color = not side_to_move
+        attackers = list(test_board.attackers(attacker_color, king_sq)) if king_sq is not None else []
+        attacker_names = ", ".join(chess.square_name(sq) for sq in attackers) if attackers else "unknown"
         return (
-            f"King safety violation: after {move_uci}, the {side_name} king remains in check. "
+            f"Illegal move {move_uci}: king safety violation after moving {from_name} to {to_name}. "
+            f"After {move_uci}, the {side_name} king on {king_name} is in check from attacker square(s): {attacker_names}. "
             "Moves that leave your king in check are illegal."
         )
 
     return (
-        "Move violates a position-specific chess rule (likely castling rights, en passant "
-        "timing, or another special constraint in the current board state)."
+        f"Illegal move {move_uci}: position-specific rule failure from {from_name} to {to_name}. "
+        "Likely castling rights, en passant timing, or another special constraint."
     )
+
+
+def print_illegal_move_report(chess_board, move_uci):
+    """Print detailed chess-centric diagnostics for an illegal move candidate."""
+    print("  ---------------- ILLEGAL MOVE DIAGNOSTIC ----------------")
+    print(f"  Position FEN: {chess_board.fen()}")
+    side = "white" if chess_board.turn == chess.WHITE else "black"
+    print(f"  Side to move: {side}")
+    print(f"  Candidate UCI: {move_uci}")
+
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except Exception:
+        print("  Could not parse UCI string into a chess move.")
+        print("  ---------------------------------------------------------")
+        return
+
+    from_name = chess.square_name(move.from_square)
+    to_name = chess.square_name(move.to_square)
+    from_piece = chess_board.piece_at(move.from_square)
+    to_piece = chess_board.piece_at(move.to_square)
+    print(f"  From square: {from_name}")
+    print(f"  To square:   {to_name}")
+    print(f"  Source piece: {from_piece.symbol() if from_piece else 'empty'}")
+    print(f"  Destination occupant: {to_piece.symbol() if to_piece else 'empty'}")
+    print(f"  Pseudo-legal: {'yes' if move in chess_board.pseudo_legal_moves else 'no'}")
+    print(f"  Legal:        {'yes' if move in chess_board.legal_moves else 'no'}")
+
+    if from_piece is not None:
+        piece_name = chess.piece_name(from_piece.piece_type)
+        legal_targets = [
+            chess.square_name(m.to_square)
+            for m in chess_board.legal_moves
+            if m.from_square == move.from_square
+        ]
+        pseudo_targets = sorted({
+            chess.square_name(m.to_square)
+            for m in chess_board.pseudo_legal_moves
+            if m.from_square == move.from_square
+        })
+        print(f"  Piece on source: {piece_name}")
+        if legal_targets:
+            print(f"  Legal targets from {from_name}: {', '.join(sorted(set(legal_targets)))}")
+        else:
+            print(f"  Legal targets from {from_name}: none")
+        if pseudo_targets and sorted(set(legal_targets)) != pseudo_targets:
+            print(f"  Pseudo-legal targets from {from_name}: {', '.join(pseudo_targets)}")
+
+    if move in chess_board.pseudo_legal_moves and move not in chess_board.legal_moves:
+        test_board = chess_board.copy(stack=False)
+        test_board.push(move)
+        king_sq = test_board.king(chess_board.turn)
+        if king_sq is not None:
+            attacker_color = not chess_board.turn
+            attackers = sorted(test_board.attackers(attacker_color, king_sq))
+            attacker_names = ", ".join(chess.square_name(sq) for sq in attackers) if attackers else "unknown"
+            king_name = chess.square_name(king_sq)
+            print(f"  King after move: {king_name}")
+            print(f"  Checking attacker square(s): {attacker_names}")
+
+    print(f"  Reason: {explain_illegal_move(chess_board, move_uci)}")
+    print("  ---------------------------------------------------------")
 
 
 def print_game_over_banner(chess_board):
@@ -382,7 +452,12 @@ def execute_robot_move_with_retry(chess_board, robot_move, zed):
         except RuntimeError as e:
             msg = str(e)
             if "appears empty in vision" in msg:
-                print(f"Robot move retry: {msg}")
+                from_name = chess.square_name(robot_move.from_square)
+                to_name = chess.square_name(robot_move.to_square)
+                print(
+                    f"Robot move retry for {robot_move.uci()} "
+                    f"(source {from_name} -> destination {to_name}): {msg}"
+                )
                 time.sleep(0.5)
                 continue
             raise
@@ -526,6 +601,7 @@ def main():
                                 except Exception as e:
                                     print(f"  ILLEGAL MOVE: {e}")
                                     print(f"  Candidate move was: {move}")
+                                    print_illegal_move_report(chess_board, move)
                                     all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                                     for rc, color_val in all_removals:
                                         sq = row_col_to_chess_square(*rc)
