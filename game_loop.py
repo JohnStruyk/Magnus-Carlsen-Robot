@@ -17,7 +17,6 @@ from stockfish_int import get_best_move, visualize_board
 from pickup_board_piece import (
     move_piece,
     capture_piece,
-    stage_from_graveyard,
     remove_piece_to_graveyard,
     place_promotion_queen_from_source,
 )
@@ -408,8 +407,6 @@ def execute_robot_move_on_board(chess_board, robot_move, zed):
         rook_to = chess.square_name(rook_to_sq)
 
         move_piece(king_piece.symbol(), king_from, king_to, zed)
-        # Explicitly stage out before approaching rook to reduce self-collision risk.
-        stage_from_graveyard(rook_piece.symbol(), zed)
         move_piece(rook_piece.symbol(), rook_from, rook_to, zed)
         return move_string
 
@@ -516,6 +513,16 @@ def main():
                             wrong_color = "black" if moving_color_val == 1 else "white"
                             right_color = "white" if turn == chess.WHITE else "black"
                             print(f"Wrong turn: {wrong_color} moved but it is {right_color}'s turn.")
+                            if moving_color_val == 1 and turn == chess.WHITE:
+                                black_removed = [tuple(rc) for rc in one_removals]
+                                if black_removed:
+                                    moved_details = []
+                                    for rc in black_removed:
+                                        sq = row_col_to_chess_square(*rc)
+                                        piece = chess_board.piece_at(sq)
+                                        piece_name = chess.piece_name(piece.piece_type) if piece else "unknown piece"
+                                        moved_details.append(f"{piece_name} from {chess.square_name(sq)}")
+                                    print("Illegal black move on white's turn: " + ", ".join(moved_details))
                             all_removals = [(tuple(rc), 1) for rc in one_removals] + [(tuple(rc), 2) for rc in two_removals]
                             for rc, color_val in all_removals:
                                 sq = row_col_to_chess_square(*rc)
