@@ -45,8 +45,8 @@ from utils.zed_camera import ZedCamera
 BOARD_TAG_EDGE_M = BOARD_CONFIG["tag_size"]
 CHESS_SQUARE_SIZE_M: Optional[float] = None
 HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
-# Hardcoded board geometry: 14in x 14in total board footprint.
-BOARD_TOTAL_SIZE_IN = 14.0
+# Hardcoded board geometry: measured total board footprint.
+BOARD_TOTAL_SIZE_IN = 13.82
 BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
 BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
 # Keep homography-ray centers for safety/reachability while still using the
