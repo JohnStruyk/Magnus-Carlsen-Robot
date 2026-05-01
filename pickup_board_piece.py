@@ -182,10 +182,10 @@ def normalize_piece_type(piece_type: str) -> str:
 def _board_config_for_pickup() -> dict:
     """``BOARD_CONFIG`` with optional measured tag edge / square size overrides."""
     cfg = {**BOARD_CONFIG, "tag_size": float(BOARD_TAG_EDGE_M)}
-    if CHESS_SQUARE_SIZE_M is not None:
-        cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
-    else:
-        cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
+    #if CHESS_SQUARE_SIZE_M is not None:
+    #    cfg["square_size"] = float(CHESS_SQUARE_SIZE_M)
+    #else:
+        #cfg["square_size"] = float(BOARD_SQUARE_SIZE_M_HARDCODED)
     return cfg
 
 
