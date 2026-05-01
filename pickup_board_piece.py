@@ -49,9 +49,9 @@ HAND_EYE_XYZ_BIAS_M = np.zeros(3, dtype=np.float64)
 BOARD_TOTAL_SIZE_IN = 14.0
 BOARD_TOTAL_SIZE_M = BOARD_TOTAL_SIZE_IN * 0.0254
 BOARD_SQUARE_SIZE_M_HARDCODED = BOARD_TOTAL_SIZE_M / 8.0
-# Force metric square centers from board-frame geometry (stable/tunable),
-# instead of per-frame homography-ray centers.
-USE_HARDCODED_SQUARE_CENTERS = True
+# Keep homography-ray centers for safety/reachability while still using the
+# hardcoded 14in square size in board config.
+USE_HARDCODED_SQUARE_CENTERS = False
 
 # ---------------------------------------------------------------------------
 # Robot motion (Lite6 + parallel gripper)
@@ -66,7 +66,7 @@ ROW1_Z_ADJUST_M = -0.004
 ROW1_Z_ADJUST_RADIUS_ROWS = 2.0
 # Lateral centering tweak for lower/near rows (meters), blended from start row
 # toward row 7. Positive moves in +board-Y direction, negative in -board-Y.
-LOWER_ROWS_CENTER_SHIFT_M = -0.003
+LOWER_ROWS_CENTER_SHIFT_M = 0.0
 LOWER_ROWS_START_ROW = 5
 # Tool-center Z in robot base (m) must stay at or above this so the arm never drives into the table
 # if vision Z is too low. Tune to your setup (measure safe height above the board / table).
