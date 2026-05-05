@@ -1,6 +1,14 @@
+# Generated assets / local saves (adjust if you need to track text artifacts)
 *.svg
 *.txt
 
+# Bytecode
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.pyo
+
+# Common tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

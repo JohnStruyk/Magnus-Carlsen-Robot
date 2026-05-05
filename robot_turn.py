@@ -1,6 +1,4 @@
-"""Robot move execution helpers used by the game loop (Black only — human plays White)."""
-
-from __future__ import annotations
+"""Stockfish pick + Lite6 execution for Black only (human is always White)."""
 
 import time
 from typing import Callable, Tuple
@@ -13,23 +11,23 @@ from pickup_board_piece import (
     move_piece,
     replace_promoted_pawn_with_source_queen,
 )
-from stockfish_int import get_best_move
+from utils.stockfish_int import get_best_move
 
 
-def _assert_black_to_move(chess_board: chess.Board, context: str) -> None:
+def ensure_black_to_move(chess_board: chess.Board, context: str) -> None:
     if chess_board.turn != chess.BLACK:
-        raise RuntimeError(f"{context}: robot only moves Black; White to move — refusing arm motion.")
+        raise RuntimeError(f"{context}: robot only moves Black. White to move, refusing arm motion.")
 
 
 def count_white_captures(chess_board: chess.Board) -> int:
-    """Return how many white pieces have been captured from the initial 16."""
+    """Graveyard offsets key off how many White pieces left the board."""
     white_pieces_on_board = sum(1 for piece in chess_board.piece_map().values() if piece.color == chess.WHITE)
     return 16 - white_pieces_on_board
 
 
 def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move, zed) -> str:
-    """Execute one physical Black move (castling moves king then rook)."""
-    _assert_black_to_move(chess_board, "execute_robot_move_on_board")
+    """Arm runs before ``chess_board.push``. Castling uses king move then rook move as two picks."""
+    ensure_black_to_move(chess_board, "execute_robot_move_on_board")
     from_sq = robot_move.from_square
     piece = chess_board.piece_at(from_sq)
     if piece is None or piece.color != chess.BLACK:
@@ -71,6 +69,7 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
     from_occupant = from_piece.symbol()
 
     if chess_board.is_en_passant(robot_move):
+        # python-chess en passant: victim square is ±8 from landing along file (sign flips by side).
         victim_sq = to_sq + (8 if chess_board.turn == chess.BLACK else -8)
         victim = chess_board.piece_at(victim_sq)
         if victim is None:
@@ -98,7 +97,7 @@ def execute_robot_move_on_board(chess_board: chess.Board, robot_move: chess.Move
 
 
 def execute_robot_move_with_retry(chess_board: chess.Board, robot_move: chess.Move, zed) -> str:
-    """Retry robot move indefinitely for any non-interrupt exception."""
+    """Retries on vision or comm faults. ``KeyboardInterrupt`` still aborts."""
     attempt = 1
     while True:
         try:
@@ -117,13 +116,13 @@ def execute_robot_move_with_retry(chess_board: chess.Board, robot_move: chess.Mo
 
 
 def capture_stable_board_state(zed, detector, camera_intrinsic):
-    """Read camera until a non-None board state is available."""
+    """Polls until ``get_board_state`` returns a grid (arm motion keeps frames unstable briefly)."""
     stable_state = None
     while stable_state is None:
         post_robot_image = zed.image
         stable_state, _, _ = get_board_state(post_robot_image, detector, camera_intrinsic)
         if stable_state is None:
-            print("Post-robot board capture failed; retrying in 0.5s...")
+            print("Post-robot board capture failed. Retrying in 0.5s...")
             time.sleep(0.5)
     return stable_state
 
@@ -135,11 +134,11 @@ def execute_robot_reply_turn(
     camera_intrinsic,
     on_game_over: Callable[[chess.Board], None],
 ) -> Tuple[chess.Color, object, bool]:
-    """Ask Stockfish for Black's move, execute it on the arm, return ``(side_to_move_after, prior_board_state, game_over)``."""
-    _assert_black_to_move(chess_board, "execute_robot_reply_turn")
+    """Returns (side_to_move_after, snapshot_for_loop, stop_loop_flag)."""
+    ensure_black_to_move(chess_board, "execute_robot_reply_turn")
     robot_move = get_best_move(chess_board.fen(), time_limit=2.0)
     if chess_board.color_at(robot_move.from_square) != chess.BLACK:
-        raise RuntimeError("Engine suggested a non-Black move; robot never plays White.")
+        raise RuntimeError("Engine suggested a non-Black move. Robot never plays White.")
     move_string = execute_robot_move_with_retry(chess_board, robot_move, zed)
     chess_board.push_uci(move_string)
 

@@ -1,3 +1,5 @@
+"""Background thread pulling LEFT RGB so callers always see a fresh numpy copy."""
+
 import numpy
 import threading
 import time
@@ -6,8 +8,6 @@ import pyzed.sl as sl
 
 
 class ZedCamera:
-    """Threaded ZED left RGB only (game pipeline uses ``image`` + ``camera_intrinsic``)."""
-
     def __init__(self, resolution=sl.RESOLUTION.HD2K, fps=15, exposure=15):
         self._zed = sl.Camera()
         init_params = sl.InitParameters()
@@ -30,6 +30,7 @@ class ZedCamera:
         camera_info = self._zed.get_camera_information()
         left_camera_param = camera_info.camera_configuration.calibration_parameters.left_cam
         self._camera_intrinsic = numpy.eye(3)
+        # Standard pinhole K (pixels): fx, fy focal lengths and cx, cy principal point on LEFT RGB.
         self._camera_intrinsic[0, 0] = left_camera_param.fx
         self._camera_intrinsic[1, 1] = left_camera_param.fy
         self._camera_intrinsic[0, 2] = left_camera_param.cx
@@ -40,12 +41,12 @@ class ZedCamera:
 
         self._running = True
         self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._update, daemon=True)
+        self._thread = threading.Thread(target=self.run_grab_loop, daemon=True)
         self._thread.start()
         while self._image is None:
             time.sleep(0.1)
 
-    def _update(self):
+    def run_grab_loop(self):
         while self._running:
             if self._zed.grab(self._runtime_parameters) == sl.ERROR_CODE.SUCCESS:
                 self._zed.retrieve_image(self._image_mat, sl.VIEW.LEFT)
@@ -62,6 +63,7 @@ class ZedCamera:
 
     @property
     def image(self):
+        # Copy avoids races with the grab thread mutating Mat buffers.
         with self._lock:
             return self._image.copy() if self._image is not None else None
 

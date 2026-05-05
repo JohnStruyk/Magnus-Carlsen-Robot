@@ -1,6 +1,4 @@
-"""Board diffs → candidate moves, classification, legality, apply to ``chess.Board``."""
-
-from __future__ import annotations
+"""Vision grid diffs -> move strings -> python-chess updates (plus callbacks into the arm)."""
 
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -14,6 +12,8 @@ WHITE_ID = 2
 
 @dataclass(frozen=True)
 class BoardChange:
+    """Counts from compare_board_states: one_* = black markers, two_* = white."""
+
     one_removals: object
     two_removals: object
     one_additions: object
@@ -56,28 +56,31 @@ class BoardChange:
         return None
 
 
-def _rc_alg(square: Sequence[int]) -> str:
+def rc_alg(square: Sequence[int]) -> str:
     row, col = int(square[0]), int(square[1])
     return f"{chr(ord('a') + col)}{8 - row}"
 
 
-def _rc_sq(rc: Sequence[int]) -> chess.Square:
+def rc_square(rc: Sequence[int]) -> chess.Square:
     r, c = int(rc[0]), int(rc[1])
     return chess.square(c, 7 - r)
 
 
-def _ep_uci(board: chess.Board, mover_rem, mover_add, victim_rem) -> str | None:
-    fs, ts, vs = _rc_sq(mover_rem), _rc_sq(mover_add), _rc_sq(victim_rem)
+def ep_uci(board: chess.Board, mover_rem, mover_add, victim_rem) -> str | None:
+    """Requires ``board.turn`` set correctly. Scans legal EP moves only."""
+    fs, ts, vs = rc_square(mover_rem), rc_square(mover_add), rc_square(victim_rem)
     for m in board.legal_moves:
         if not board.is_en_passant(m) or m.from_square != fs or m.to_square != ts:
             continue
+        # EP victim sits one rank behind the landing square along pawn advance direction.
         cap = m.to_square - 8 if board.turn == chess.WHITE else m.to_square + 8
         if cap == vs:
             return m.uci()
     return None
 
 
-def _castle_from_grid(removals: np.ndarray, additions: np.ndarray) -> str | None:
+def castle_from_grid(removals: np.ndarray, additions: np.ndarray) -> str | None:
+    # Warp columns where king/rook markers vanished (rcols) and where they appeared (acols).
     if removals.shape[0] != 2 or additions.shape[0] != 2:
         return None
     rcols = sorted(int(x) for x in removals[:, 1])
@@ -91,9 +94,9 @@ def _castle_from_grid(removals: np.ndarray, additions: np.ndarray) -> str | None
     return None
 
 
-def _capture_uci(cap_rem, cap_add, vic_rem) -> str | None:
+def capture_uci(cap_rem, cap_add, vic_rem) -> str | None:
     if np.array_equal(cap_add, vic_rem):
-        return _rc_alg(cap_rem) + _rc_alg(cap_add)
+        return rc_alg(cap_rem) + rc_alg(cap_add)
     return None
 
 
@@ -104,6 +107,7 @@ def determine_move(
     two_additions,
     board: chess.Board | None = None,
 ) -> str:
+    """Either UCI / O-O / O-O-O, or 'BAD.*' if the grid pattern is nonsense (printed upstream)."""
     if len(one_additions) + len(two_additions) > len(one_removals) + len(two_removals):
         return "BAD. more pieces after than before"
     if len(one_additions) + len(two_additions) + 1 < len(one_removals) + len(two_removals):
@@ -115,60 +119,60 @@ def determine_move(
 
     if len(one_removals) == 1 and len(one_additions) == 1:
         if len(two_removals) == 1:
-            c = _capture_uci(one_removals[0], one_additions[0], two_removals[0])
+            c = capture_uci(one_removals[0], one_additions[0], two_removals[0])
             if c:
                 return c
             if board is not None:
-                ep = _ep_uci(board, one_removals[0], one_additions[0], two_removals[0])
+                ep = ep_uci(board, one_removals[0], one_additions[0], two_removals[0])
                 if ep:
                     return ep
             return "BAD. capture/ep mismatch"
-        return _rc_alg(one_removals[0]) + _rc_alg(one_additions[0])
+        return rc_alg(one_removals[0]) + rc_alg(one_additions[0])
 
     if len(one_removals) == 2 and len(one_additions) == 2:
-        c = _castle_from_grid(one_removals, one_additions)
+        c = castle_from_grid(one_removals, one_additions)
         return c if c else "BAD. castle pattern"
 
     if len(two_removals) == 1 and len(two_additions) == 1:
         if len(one_removals) == 1:
-            c = _capture_uci(two_removals[0], two_additions[0], one_removals[0])
+            c = capture_uci(two_removals[0], two_additions[0], one_removals[0])
             if c:
                 return c
             if board is not None:
-                ep = _ep_uci(board, two_removals[0], two_additions[0], one_removals[0])
+                ep = ep_uci(board, two_removals[0], two_additions[0], one_removals[0])
                 if ep:
                     return ep
             return "BAD. capture/ep mismatch"
-        return _rc_alg(two_removals[0]) + _rc_alg(two_additions[0])
+        return rc_alg(two_removals[0]) + rc_alg(two_additions[0])
 
     if len(two_removals) == 2 and len(two_additions) == 2:
-        c = _castle_from_grid(two_removals, two_additions)
+        c = castle_from_grid(two_removals, two_additions)
         return c if c else "BAD. castle pattern"
 
     return "BAD. unsupported pattern"
 
 
-def _sq(row: int, col: int) -> chess.Square:
+def grid_square(row: int, col: int) -> chess.Square:
+    # Same row major as detect_pieces: row 0 = rank 8.
     return chess.square(col, 7 - row)
 
 
-def _describe_move(board: chess.Board, removals, additions) -> None:
-    all_r = [(tuple(sq), 1) for sq in removals[0]] + [(tuple(sq), 2) for sq in removals[1]]
-    all_a = [(tuple(sq), 1) for sq in additions[0]] + [(tuple(sq), 2) for sq in additions[1]]
-    for fr, fc in all_r:
-        for tr, tc in all_a:
+def describe_move(board: chess.Board, removals, additions) -> None:
+    for fr, fc in [(tuple(sq), 1) for sq in removals[0]] + [(tuple(sq), 2) for sq in removals[1]]:
+        for tr, tc in [(tuple(sq), 1) for sq in additions[0]] + [(tuple(sq), 2) for sq in additions[1]]:
             if fc != tc:
                 continue
-            fs, ts = _sq(*fr), _sq(*tr)
+            fs, ts = grid_square(*fr), grid_square(*tr)
             p = board.piece_at(fs)
             cn = "black" if fc == 1 else "white"
             pn = chess.piece_name(p.piece_type) if p else "unknown"
-            print(f"  {cn} {pn} {chess.square_name(fs)} → {chess.square_name(ts)}")
+            print(f"  {cn} {pn} {chess.square_name(fs)} -> {chess.square_name(ts)}")
             return
     print("  (could not pair removal/addition)")
 
 
-def _illegal_reason(board: chess.Board, move: str) -> str:
+def illegal_reason(board: chess.Board, move: str) -> str:
+    """Returns ``legal`` or a short reason string (shared with ``illegal_extra``)."""
     if move.startswith("BAD"):
         return move
     if move in ("O-O", "O-O-O"):
@@ -200,8 +204,8 @@ def _illegal_reason(board: chess.Board, move: str) -> str:
     return "special rule (castle/ep/rights)"
 
 
-def _illegal_extra(board: chess.Board, move: str) -> None:
-    print(f"  ({_illegal_reason(board, move)})")
+def illegal_extra(board: chess.Board, move: str) -> None:
+    print(f"  ({illegal_reason(board, move)})")
     if move in ("O-O", "O-O-O") or move.startswith("BAD"):
         return
     try:
@@ -213,18 +217,19 @@ def _illegal_extra(board: chess.Board, move: str) -> None:
         pass
 
 
-def _return_pieces(board: chess.Board, one_r, two_r) -> None:
+def return_pieces(board: chess.Board, one_r, two_r) -> None:
+    """Console-only: where to put pieces back after we reject a vision move."""
     for rc, cv in [(tuple(r), 1) for r in one_r] + [(tuple(r), 2) for r in two_r]:
-        sq = _sq(*rc)
+        sq = grid_square(*rc)
         p = board.piece_at(sq)
         cn = "white" if cv == 2 else "black"
         pn = chess.piece_name(p.piece_type) if p else "unknown"
         print(f"  return {cn} {pn} to {chess.square_name(sq)}")
 
 
-def _detect_castle(board: chess.Board, removals, additions) -> str | None:
-    rs = {_sq(int(r), int(c)) for r, c in removals}
-    ads = {_sq(int(r), int(c)) for r, c in additions}
+def detect_castling_uci(board: chess.Board, removals, additions) -> str | None:
+    rs = {grid_square(int(r), int(c)) for r, c in removals}
+    ads = {grid_square(int(r), int(c)) for r, c in additions}
     for mv in board.legal_moves:
         if not board.is_castling(mv):
             continue
@@ -237,7 +242,7 @@ def _detect_castle(board: chess.Board, removals, additions) -> str | None:
     return None
 
 
-def _push_move(board: chess.Board, move: str) -> None:
+def push_move(board: chess.Board, move: str) -> None:
     if move in ("O-O", "O-O-O"):
         board.push_san(move)
     else:
@@ -258,14 +263,15 @@ def process_detected_change(
     try_robot_reply: Callable[[str], bool],
     on_game_over: Callable[[chess.Board], None],
 ) -> TurnProcessResult:
+    """The only place vision touches chess_board + optional try_robot_reply()."""
     one_r, two_r, one_a, two_a = (
         change.one_removals,
         change.two_removals,
         change.one_additions,
         change.two_additions,
     )
-    mv_color = change.moving_color_val
-    expect = WHITE_ID if turn == chess.WHITE else BLACK_ID
+    mv_color = change.moving_color_val  # which marker color moved in vision (1=black 2=white)
+    expect = WHITE_ID if turn == chess.WHITE else BLACK_ID  # python-chess side to move
     if mv_color is not None and mv_color != expect:
         wc = "black" if mv_color == BLACK_ID else "white"
         rc = "white" if turn == chess.WHITE else "black"
@@ -273,25 +279,25 @@ def process_detected_change(
         if mv_color == BLACK_ID and turn == chess.WHITE:
             parts = []
             for rc_ in one_r:
-                sq = _sq(*tuple(rc_))
+                sq = grid_square(*tuple(rc_))
                 p = chess_board.piece_at(sq)
                 parts.append(f"{chess.piece_name(p.piece_type) if p else '?'}@{chess.square_name(sq)}")
             if parts:
                 print("Black moved on White's turn: " + ", ".join(parts))
-        _return_pieces(chess_board, one_r, two_r)
+        return_pieces(chess_board, one_r, two_r)
         return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     if change.is_castle:
-        cc = BLACK_ID if len(one_r) == 2 else WHITE_ID
+        cc = BLACK_ID if len(one_r) == 2 else WHITE_ID  # castle detected on black markers vs white
         rem, add = (one_r, one_a) if cc == BLACK_ID else (two_r, two_a)
-        c_uci = _detect_castle(chess_board, rem, add)
+        c_uci = detect_castling_uci(chess_board, rem, add)
         if c_uci is None:
-            print("Castling pattern but no legal castle; reset pieces.")
+            print("Castling pattern but no legal castle. Reset pieces.")
             return TurnProcessResult(prior_board_state=board_state, game_over=False)
         print(f"Castle: {c_uci}")
         try:
             chess_board.push_uci(c_uci)
-            turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
+            turn = chess.BLACK if turn == chess.WHITE else chess.WHITE  # side after castle push
         except Exception as exc:
             print(f"  ILLEGAL CASTLE ({exc})")
             return TurnProcessResult(prior_board_state=board_state, game_over=False)
@@ -301,20 +307,20 @@ def process_detected_change(
 
     if not change.is_single_move and not change.is_legal_capture:
         if len(one_r) or len(two_r):
-            print("Invalid change; reset pieces.")
-            _return_pieces(chess_board, one_r, two_r)
+            print("Invalid change. Reset pieces.")
+            return_pieces(chess_board, one_r, two_r)
         return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     move = determine_move(one_r, two_r, one_a, two_a, chess_board)
     print(f"Move: {move}" + (" (White)" if turn == chess.WHITE else " (Black to move)"))
-    _describe_move(chess_board, (one_r, two_r), (one_a, two_a))
+    describe_move(chess_board, (one_r, two_r), (one_a, two_a))
 
     try:
-        rsn = _illegal_reason(chess_board, move)
+        rsn = illegal_reason(chess_board, move)
         if rsn != "legal":
             raise ValueError(rsn)
-        _push_move(chess_board, move)
-        turn = chess.BLACK if turn == chess.WHITE else chess.WHITE
+        push_move(chess_board, move)
+        turn = chess.BLACK if turn == chess.WHITE else chess.WHITE  # toggled after accepted push
         if chess_board.is_check():
             cs = "White" if chess_board.turn == chess.WHITE else "Black"
             print(f"Check: {cs}")
@@ -324,8 +330,8 @@ def process_detected_change(
     except Exception as exc:
         print(f"  ILLEGAL: {exc} | candidate {move}")
         print(f"  FEN: {chess_board.fen()}")
-        _illegal_extra(chess_board, move)
-        _return_pieces(chess_board, one_r, two_r)
+        illegal_extra(chess_board, move)
+        return_pieces(chess_board, one_r, two_r)
         return TurnProcessResult(prior_board_state=board_state, game_over=False)
 
     if turn == chess.BLACK and try_robot_reply("Black (robot) move failed"):

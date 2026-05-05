@@ -1,3 +1,5 @@
+"""Playmat/chessboard tags -> PnP + drawing helpers (pickup + calibrate_tags CLI share this)."""
+
 import cv2, numpy
 from pupil_apriltags import Detector
 
@@ -9,27 +11,18 @@ ROBOT_IP_DEFAULT = "192.168.1.159"
 TAG_SIZE = 0.08
 PREVIEW_MAX_WIDTH = 1280
 
-# Different families, same numeric ids 0–3: decode separately so both can appear in one image.
-# tag36h11 ≈ 6×6; tag25h9 ≈ 5×5. Swap if your physical prints are reversed.
+# Same numeric ids on both sheets — different families keeps detectors from colliding.
 PLAYMAT_TAG_FAMILY = "tag36h11"
 CHESSBOARD_TAG_FAMILY = "tag25h9"
-_DETECTOR_CACHE = {}
+DETECTOR_CACHE = {}
 
-# Playmat corners in robot frame — ids 0–3 in PLAYMAT_TAG_FAMILY
+# solvePnP world XY per corner id (z=0 playmat plane).
 TAG_CENTER_COORDINATES = [[0.38, 0.4],
                          [0.38, -0.4],
                          [0.0, 0.4],
                          [0.0, -0.4]]
 
 def get_pnp_pairs(tags):
-    """3D–2D pairs for playmat tags (PLAYMAT_TAG_FAMILY), ids 0–3.
-
-    World corner order **must match** ``piece_continuity.get_4x4_transform`` (same
-    ``tag.corners[k]`` → board/playmat XY mapping). The old order swapped Y for
-    corners 0–3 vs that function, which made camera↔robot PnP inconsistent with
-    chessboard PnP: overlays looked correct but ``t_robot_cam @ t_board_to_cam``
-    sent the arm to the wrong XY.
-    """
     half = TAG_SIZE / 2.0
     world_points = numpy.empty([0, 3])
     image_points = numpy.empty([0, 2])
@@ -39,7 +32,7 @@ def get_pnp_pairs(tags):
         if tid < 0 or tid > 3:
             continue
         cx, cy = TAG_CENTER_COORDINATES[tid]
-        # Identical to piece_continuity.get_4x4_transform wp_corners (indices 0..3).
+        # Same corner walk order as piece_continuity.get_4x4_transform — don't reorder casually.
         wp_corners = [
             [cx - half, cy - half],
             [cx - half, cy + half],
@@ -55,8 +48,7 @@ def get_pnp_pairs(tags):
     return world_points, image_points
 
 
-def _tag_polygon_area_sq_px(tag):
-    """Quadrilateral area in pixels (opencv expects Nx1x2)."""
+def tag_polygon_area_sq_px(tag):
     c = numpy.asarray(tag.corners, dtype=numpy.float32)
     if c.shape[0] < 4:
         return 0.0
@@ -65,7 +57,6 @@ def _tag_polygon_area_sq_px(tag):
 
 
 def to_bgr_display(image):
-    """BGR image for cv2.imshow (handles BGRA / BGR / gray from ZED)."""
     if image is None:
         return None
     if len(image.shape) == 2:
@@ -75,7 +66,7 @@ def to_bgr_display(image):
     return image.copy()
 
 
-def _to_gray(image):
+def gray_from_image(image):
     if image is None:
         return None
     if len(image.shape) == 2:
@@ -86,45 +77,36 @@ def _to_gray(image):
 
 
 def detect_playmat_and_chessboard_tags(image):
-    """
-    Run two detectors: playmat (e.g. tag36h11) and chessboard (e.g. tag25h9). Both use ids 0–3.
-
-    Returns (gray, playmat_tags, chessboard_tags).
-    """
     if image is None:
         return None, [], []
-    gray = _to_gray(image)
-    playmat_detector = _DETECTOR_CACHE.get(PLAYMAT_TAG_FAMILY)
+    gray = gray_from_image(image)
+    playmat_detector = DETECTOR_CACHE.get(PLAYMAT_TAG_FAMILY)
     if playmat_detector is None:
         playmat_detector = Detector(families=PLAYMAT_TAG_FAMILY)
-        _DETECTOR_CACHE[PLAYMAT_TAG_FAMILY] = playmat_detector
-    chess_detector = _DETECTOR_CACHE.get(CHESSBOARD_TAG_FAMILY)
+        DETECTOR_CACHE[PLAYMAT_TAG_FAMILY] = playmat_detector
+    chess_detector = DETECTOR_CACHE.get(CHESSBOARD_TAG_FAMILY)
     if chess_detector is None:
         chess_detector = Detector(families=CHESSBOARD_TAG_FAMILY)
-        _DETECTOR_CACHE[CHESSBOARD_TAG_FAMILY] = chess_detector
+        DETECTOR_CACHE[CHESSBOARD_TAG_FAMILY] = chess_detector
     playmat_tags = playmat_detector.detect(gray, estimate_tag_pose=False)
     chess_tags = chess_detector.detect(gray, estimate_tag_pose=False)
     return gray, playmat_tags, chess_tags
 
 
 def best_tag_per_id_0_3(tags):
-    """
-    One detection per id 0–3 (largest polygon if duplicates). Returns (list, ok) with ok True iff len==4.
-    """
     by_id = {}
     for t in tags:
         tid = int(t.tag_id)
         if tid not in (0, 1, 2, 3):
             continue
         prev = by_id.get(tid)
-        if prev is None or _tag_polygon_area_sq_px(t) > _tag_polygon_area_sq_px(prev):
+        if prev is None or tag_polygon_area_sq_px(t) > tag_polygon_area_sq_px(prev):
             by_id[tid] = t
     ordered = [by_id[i] for i in (0, 1, 2, 3) if i in by_id]
     return ordered, len(by_id) == 4
 
 
 def draw_dual_family_tag_overlays(bgr_image, playmat_tags, chessboard_tags):
-    """Draw playmat (green) vs chessboard (orange) detections; same ids 0–3, different families."""
     def draw_set(tags, prefix, color):
         for tag in tags:
             tid = int(tag.tag_id)
@@ -179,7 +161,6 @@ def draw_pose_axes(image, camera_intrinsic, pose, size=0.1):
 
 
 def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
-    """PnP from playmat tags (ids 0–3); pass one tag per id from best_tag_per_id_0_3."""
     world_points, image_points = get_pnp_pairs(tags)
     if world_points.shape[0] < 4:
         print("Insufficient playmat tag corners after filtering (need family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY)
@@ -197,7 +178,7 @@ def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
     return transform_mat
 
 
-def main():
+def main() -> None:
     zed = ZedCamera()
     camera_intrinsic = zed.camera_intrinsic
 
@@ -215,7 +196,7 @@ def main():
         t_cam_robot = get_transform_camera_robot_from_tags(pm_best, camera_intrinsic) if pm_ok else None
         if not pm_ok:
             print(
-                f"Playmat {PLAYMAT_TAG_FAMILY}: need ids 0–3; "
+                f"Playmat {PLAYMAT_TAG_FAMILY}: need ids 0–3. "
                 f"got {sorted(set(int(t.tag_id) for t in playmat_tags))}"
             )
         if t_cam_robot is not None:

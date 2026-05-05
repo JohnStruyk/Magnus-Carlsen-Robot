@@ -1,6 +1,4 @@
-"""Stockfish interface and board visualization helpers."""
-
-from __future__ import annotations
+"""Spawn Stockfish over UCI. Can dump SVG when the operator sanity-checks FEN."""
 
 import os
 import webbrowser
@@ -20,11 +18,6 @@ BOARD_SVG_PATH = "current_board.svg"
 
 
 def get_best_move(fen_string: str, time_limit: float = 2.0, engine_path: Optional[str] = None) -> chess.Move:
-    """
-    Ask Stockfish for the best move from a FEN position.
-
-    ``engine_path`` defaults to ``$STOCKFISH_PATH`` or ``DEFAULT_STOCKFISH_PATH``.
-    """
     engine_executable = engine_path or DEFAULT_STOCKFISH_PATH
     if not Path(engine_executable).exists():
         raise FileNotFoundError(
@@ -39,7 +32,6 @@ def get_best_move(fen_string: str, time_limit: float = 2.0, engine_path: Optiona
 
 
 def visualize_board(board: chess.Board, best_move: Optional[chess.Move] = None, output_path: str = BOARD_SVG_PATH) -> None:
-    """Render board SVG (optionally with best-move arrow) and open it in browser."""
     arrows = []
     if best_move is not None:
         arrows = [chess.svg.Arrow(best_move.from_square, best_move.to_square, color="#0000cccc")]
