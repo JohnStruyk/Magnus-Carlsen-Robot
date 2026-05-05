@@ -1,10 +1,12 @@
-# Generated assets / local saves (adjust if you need to track text artifacts)
+# Generated assets / local saves 
 *.svg
 *.txt
 
-# Bytecode
+# Bytecode. If these were committed once, run: git rm -r --cached __pycache__
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyc
 *$py.class
 *.pyo
 
