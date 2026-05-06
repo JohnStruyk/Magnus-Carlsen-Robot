@@ -1,6 +1,16 @@
+# Generated assets / local saves 
 *.svg
 *.txt
 
+# Bytecode. If these were committed once, run: git rm -r --cached __pycache__
 __pycache__/
+**/__pycache__/
+*.py[cod]
 *.pyc
+*$py.class
 *.pyo
+
+# Common tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

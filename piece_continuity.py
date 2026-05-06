@@ -1,52 +1,40 @@
+"""Tags -> poses -> warp -> per-square occupancy used by game_loop and pickup."""
+
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
-from utils.zed_camera import ZedCamera
-import chess_utils
 
-# --- 1. CONFIGURATION ---
-
-# Robot Calibration (4 tags on robot mat to establish robot-to-camera)
+# Robot mat vs chessboard AprilTag configs (ids 0–3 each).
 ROBOT_CALIB_CONFIG = {
     "tag_size": 0.08,
     "tag_ids": [0, 1, 2, 3],
     "tag_centers": {
-        0: [0.38, 0.4], 
-        1: [0.38, -0.4], 
-        2: [0.0, 0.4], 
-        3: [0.0, -0.4]
-    }
-}
-
-# Chessboard Calibration (4 tags on board to establish board-to-camera)
-BOARD_CONFIG = {
-    "tag_size": 0.05867,        
-    "square_size": 0.043,    
-    "grid_size": (8, 8),     
-    "tag_ids": [0, 1, 2, 3], # Adjust these to match your 5x5 tag IDs
-    "tag_centers": {
-        0: [0.0, 0.0],       # Origin: Bottom-Left Tag
-        1: [0.0, 0.277],       # Top Left
-        2: [0.52848, 0.0],      # Bottom-Right
-        3: [0.52848, 0.277]       # Top-Right
+        0: [0.38, 0.4],
+        1: [0.38, -0.4],
+        2: [0.0, 0.4],
+        3: [0.0, -0.4],
     },
-    # Offset from Tag 0 center to the bottom left corner of the first chessboard square (0,0)
-    #"grid_origin_offset": [0.03, -0.008] 
-    "grid_origin_offset": [0.0889, -0.0381] 
 }
 
-TAG_WIDTH_OFFSET = 17.5
-TAG_HEIGHT_OFFSET = -20.5
+BOARD_CONFIG = {
+    "tag_size": 0.05867,
+    "square_size": 0.043,
+    "grid_size": (8, 8),
+    "tag_ids": [0, 1, 2, 3],
+    "tag_centers": {
+        0: [0.0, 0.0],  # origin: bottom-left tag
+        1: [0.0, 0.277],  # top-left
+        2: [0.52848, 0.0],  # bottom-right
+        3: [0.52848, 0.277],  # top-right
+    },
+    "grid_origin_offset": [0.0889, -0.0381],
+}
 
-
-# --- 2. TRANSFORMATION LOGIC ---
 
 def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
-    """Calculates the 4x4 transform matrix from the object to the camera."""
+    """PnP from tag corners -> 4×4 object-from-camera (also returns rvec/tvec for projections)."""
     target_ids = set(int(x) for x in config["tag_ids"])
     found_tags = [t for t in tags if int(t.tag_id) in target_ids]
-    
-    # Logic to specify what should happen if not all the tags are seen, want all 4 for the chessboard part
+
     if strict and len(found_tags) < len(target_ids):
         return None, None, None
     if not strict and len(found_tags) == 0:
@@ -56,25 +44,24 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     image_points = []
     half = config["tag_size"] / 2.0
 
-    # Sort tags to ensure consistent mapping
     for tag in sorted(found_tags, key=lambda x: int(x.tag_id)):
         cx, cy = config["tag_centers"][int(tag.tag_id)]
-        # World points for tag corners: BL, BR, TR, TL
         wp_corners = [
-            [cx - half, cy - half, 0], 
-            [cx - half, cy + half, 0], 
-            [cx + half, cy + half, 0], 
-            [cx + half, cy - half, 0]  
+            [cx - half, cy - half, 0],
+            [cx - half, cy + half, 0],
+            [cx + half, cy + half, 0],
+            [cx + half, cy - half, 0],
         ]
         world_points.extend(wp_corners)
         image_points.extend(tag.corners)
 
     success, rvec, tvec = cv2.solvePnP(
-        np.array(world_points, dtype=np.float32), 
-        np.array(image_points, dtype=np.float32), 
-        camera_intrinsic, None
+        np.array(world_points, dtype=np.float32),
+        np.array(image_points, dtype=np.float32),
+        camera_intrinsic,
+        None,
     )
-    
+
     if not success:
         return None, None, None
 
@@ -82,10 +69,11 @@ def get_4x4_transform(tags, config, camera_intrinsic, strict=True):
     t_mat = np.eye(4)
     t_mat[:3, :3] = rmat
     t_mat[:3, 3] = tvec.flatten()
-    return t_mat, rvec, tvec 
+    return t_mat, rvec, tvec
+
 
 def get_board_centers_local(config):
-    """Square centers in board frame. Index ``i = r*8+c`` for nested ``for r: for c:`` (same order as warped ``row,col``)."""
+    """64 homogeneous points in board frame, row-major index i = row*8 + col."""
     grid_pts = []
     off_x, off_y = config["grid_origin_offset"]
     s = config["square_size"]
@@ -95,19 +83,24 @@ def get_board_centers_local(config):
             grid_pts.append([off_x + (r * s), off_y + (c * s), 0.0, 1.0])
     return np.array(grid_pts, dtype=np.float32)
 
+
 def get_warped(img, b_rvec, b_tvec, intrix, square_px):
+    """Homography from raw frame to square_px-sized cells (also returns corners + H for inverse maps)."""
+    # Warp canvas width and height in pixels (8 squares per side).
     W = BOARD_CONFIG["grid_size"][1] * square_px
     H = BOARD_CONFIG["grid_size"][0] * square_px
 
     off_x, off_y = BOARD_CONFIG["grid_origin_offset"]
 
-    
-    board_corners_3d = np.array([
-        BOARD_CONFIG["tag_centers"][0],  # bottom-left
-        BOARD_CONFIG["tag_centers"][1],  # top-left
-        BOARD_CONFIG["tag_centers"][3],  # top-right
-        BOARD_CONFIG["tag_centers"][2],  # bottom-right
-    ], dtype=np.float32)
+    board_corners_3d = np.array(
+        [
+            BOARD_CONFIG["tag_centers"][0],
+            BOARD_CONFIG["tag_centers"][1],
+            BOARD_CONFIG["tag_centers"][3],
+            BOARD_CONFIG["tag_centers"][2],
+        ],
+        dtype=np.float32,
+    )
 
     board_corners_3d[0, 0] += off_x
     board_corners_3d[0, 1] += off_y
@@ -121,57 +114,44 @@ def get_warped(img, b_rvec, b_tvec, intrix, square_px):
     board_corners_3d[3, 0] -= off_x
     board_corners_3d[3, 1] += off_y
 
-    # add z=0
-    board_corners_3d = np.hstack([board_corners_3d, np.zeros((4,1), dtype=np.float32)])
-    
+    board_corners_3d = np.hstack([board_corners_3d, np.zeros((4, 1), dtype=np.float32)])
 
-    img_corners, _ = cv2.projectPoints(
-        board_corners_3d,
-        b_rvec,
-        b_tvec,
-        intrix,
-        None
-    )
+    img_corners, _ = cv2.projectPoints(board_corners_3d, b_rvec, b_tvec, intrix, None)
 
     img_corners = img_corners.reshape(-1, 2)
 
-    dst_corners = np.array([
-        [0, H],
-        [0, 0],
-        [W, 0],
-        [W, H]
-    ], dtype=np.float32)
+    # Vertex order pairs with ``board_corners_3d`` / ``img_corners`` (same corner walk).
+    dst_corners = np.array([[0, H], [0, 0], [W, 0], [W, H]], dtype=np.float32)
 
     H_mat, _ = cv2.findHomography(img_corners, dst_corners)
 
     warped = cv2.warpPerspective(img, H_mat, (W, H))
-    # img_corners -> warped: p_w ~ H @ p_img, so p_img = H^{-1} @ p_w for drawing on raw image.
     return warped, img_corners, H_mat
 
+
 def detect_pieces(warped, square_px):
-    board_state = np.zeros((8,8),dtype=int)
+    """Cheap RGB heuristic (green/black markers vs yellow-ish White). Tune thresholds if lighting shifts."""
+    board_state = np.zeros((8, 8), dtype=int)
 
     for row in range(8):
         for col in range(8):
-            cx = int(col*square_px+square_px/2)
-            cy = int(row*square_px+square_px/2)
+            cx = int(col * square_px + square_px / 2)
+            cy = int(row * square_px + square_px / 2)
 
-            region_size = 20 // 2 #pixel size of window
-            region = warped[cy-region_size:cy+region_size, cx-region_size:cx+region_size]
-            avg_color = region.mean(axis=(0,1))
+            region_size = 20 // 2  # half-width of RGB patch sampled at square center
+            region = warped[cy - region_size : cy + region_size, cx - region_size : cx + region_size]
+            avg_color = region.mean(axis=(0, 1))
 
-            b,g,r = avg_color[:3]
-            total = b+g+r
+            b, g, r = avg_color[:3]
+            total = b + g + r
 
-            #classify by color
-            if g > r*2 - 10 and b > r*2 - 10: #green piece, shows up turquoise ish
-                board_state[row,col] = 1
-            elif r > b +30 and g > b+30 and total<400: #yellow
-                board_state[row,col] = 2
-            elif r > b+30 and r > g+30: #red
-                board_state[row,col] = 2
-            
-            #print(f"Row: {row}, Col:{col}\nr: {r}, g: {g}, b: {b}\ntotal: {total}\nBoard_state: {board_state[row,col]}")
+            # 1 = black markers (green-heavy). 2 = white markers (warm but not too bright).
+            if g > r * 2 - 10 and b > r * 2 - 10:
+                board_state[row, col] = 1
+            elif r > b + 30 and g > b + 30 and total < 400:
+                board_state[row, col] = 2
+            elif r > b + 30 and r > g + 30:
+                board_state[row, col] = 2
 
     return board_state
 
@@ -182,24 +162,25 @@ def draw_piece_detected(warped, board_state, square_px):
     for r in range(8):
         for c in range(8):
 
-            cx = int(c*square_px+square_px/2)
-            cy = int(r*square_px+square_px/2)
+            cx = int(c * square_px + square_px / 2)
+            cy = int(r * square_px + square_px / 2)
 
-            val = board_state[r,c]
+            val = board_state[r, c]
 
-            if val == 1: #we found a green piece
-                cv2.circle(overlay, (cx,cy), 12, (255,0,255),-1)
+            if val == 1:
+                cv2.circle(overlay, (cx, cy), 12, (255, 0, 255), -1)
 
-            elif val == 2: #red/yellow
-                cv2.circle(overlay, (cx,cy), 12, (255,0,0),-1)
+            elif val == 2:
+                cv2.circle(overlay, (cx, cy), 12, (255, 0, 0), -1)
 
             else:
-                cv2.rectangle(overlay, (cx-10,cy-10), (cx+10,cy+10),(0,0,255),3 )
-    
+                cv2.rectangle(overlay, (cx - 10, cy - 10), (cx + 10, cy + 10), (0, 0, 255), 3)
+
     return overlay
 
-def compare_board_states(old_state, new_state):
 
+def compare_board_states(old_state, new_state):
+    """Four masks: black removed/added and white removed/added. Fed into ``BoardChange``."""
     one_removals = np.argwhere((old_state == 1) & (new_state != 1))
     one_additions = np.argwhere((old_state != 1) & (new_state == 1))
 
@@ -208,43 +189,41 @@ def compare_board_states(old_state, new_state):
 
     return one_removals, two_removals, one_additions, two_additions
 
+
 def get_board_state(cv_image, detector, camera_intrinsic):
-    """Detects board and pieces. Returns (board_state, warped_with_pieces, resized_raw) or (None, None, None) on failure."""
+    """Returns (8×8 ints | None, warp viz, resized raw annot). None anywhere -> caller skips."""
     gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
     tags = detector.detect(gray)
 
-    # 1. Camera -> Robot Transform
+    # Playmat tags -> robot-from-camera (lose pose if mat corners missing).
     t_robot_to_cam, _, _ = get_4x4_transform(tags, ROBOT_CALIB_CONFIG, camera_intrinsic, strict=False)
     if t_robot_to_cam is None:
         print("Robot tags (0-3) not found.")
         return None, None, None
     t_cam_to_robot = np.linalg.inv(t_robot_to_cam)
 
-    # 2. Board -> Camera Transform
+    # Chessboard sheet tags -> board-from-camera pose plus rvec/tvec for warp.
     t_board_to_cam, b_rvec, b_tvec = get_4x4_transform(tags, BOARD_CONFIG, camera_intrinsic, strict=True)
     if t_board_to_cam is None:
         print("Chessboard tags not found.")
         return None, None, cv2.resize(cv_image, (1080, 700))
 
-    # 3. Compute Centers in Robot Frame
     local_centers = get_board_centers_local(BOARD_CONFIG)
     robot_frame_centers = {}
     for i, p_local in enumerate(local_centers):
+        # Chain board-local homogeneous point into robot base via cam frame.
         p_robot = t_cam_to_robot @ (t_board_to_cam @ p_local)
         robot_frame_centers[i] = p_robot[:3].tolist()
 
-    # print(f"Captured {len(tags)} tags.")
-    # print(f"Square 0 (Robot Frame): {robot_frame_centers[0]}")
     if len(tags) < 4:
-        print("Vision Error: only captured {len(tags)} tags.")
+        print(f"Vision Error: only captured {len(tags)} tags.")
 
-    output_square_px = 100
+    output_square_px = 100  # must match pickup_board_piece occupancy grid sampling
     warped, img_corners, _ = get_warped(cv_image, b_rvec, b_tvec, camera_intrinsic, output_square_px)
     board_state = detect_pieces(warped, output_square_px)
     warped_with_pieces = draw_piece_detected(warped, board_state, output_square_px)
 
-    # Annotate raw image for display
-    pts_3d_xyz = local_centers[:, :3].astype(np.float32)
+    pts_3d_xyz = local_centers[:, :3].astype(np.float32)  # metric centers on board plane
     grid_2d, _ = cv2.projectPoints(pts_3d_xyz, b_rvec, b_tvec, camera_intrinsic, None)
     for pt in grid_2d:
         cv2.circle(cv_image, tuple(pt.ravel().astype(int)), 4, (0, 255, 0), -1)
@@ -257,56 +236,6 @@ def get_board_state(cv_image, detector, camera_intrinsic):
     return board_state, warped_with_pieces, resized_raw
 
 
-def display_board_state(warped_with_pieces, resized_raw):
-    """Shows the raw annotated image and the warped piece detection overlay, waits for keypress each."""
-    # cv2.imshow('Robot Calibration', resized_raw)
-    # cv2.waitKey(0)
-    cv2.imshow('Warped with Piece Detection', warped_with_pieces)
+def display_board_state(warped_with_pieces) -> None:
+    cv2.imshow("Warped with Piece Detection", warped_with_pieces)
     cv2.waitKey(0)
-
-
-# --- 3. MAIN ---
-
-def main():
-    zed = ZedCamera()
-    detector = Detector(families='tag36h11 tag25h9')
-    camera_intrinsic = np.array(((1062.18, 0, 1047.36), (0, 1062.18, 610.32), (0, 0, 1)))
-
-    prior_board_state = None
-
-    try:
-        while True:
-            cv_image = zed.image
-            board_state, warped_with_pieces, resized_raw = get_board_state(cv_image, detector, camera_intrinsic)
-
-            if board_state is None:
-                print("Board not detected, retrying...")
-                if resized_raw is not None:
-                    cv2.imshow('Robot Calibration', resized_raw)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-                continue
-
-            display_board_state(warped_with_pieces, resized_raw)
-            cv2.destroyAllWindows()
-
-            if prior_board_state is not None:
-                one_removals, two_removals, one_additions, two_additions = compare_board_states(prior_board_state, board_state)
-                predicted_move = chess_utils.determine_move(one_removals, two_removals, one_additions, two_additions)
-                print(f"one_removals: {one_removals}")
-                print(f"two_removals: {two_removals}")
-                print(f"one_additions: {one_additions}")
-                print(f"two_additions: {two_additions}")
-                print(f"predicted move: {predicted_move}")
-
-            prior_board_state = board_state
-
-            key_pressed = cv2.waitKey(1)
-            if key_pressed == ord('k'):
-                break
-
-    finally:
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()

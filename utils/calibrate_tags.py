@@ -1,0 +1,240 @@
+"""Playmat/chessboard tags -> PnP + drawing helpers (pickup + calibrate_tags CLI share this)."""
+
+import cv2, numpy
+from pupil_apriltags import Detector
+
+from utils.zed_camera import ZedCamera
+from xarm.wrapper import XArmAPI
+
+ROBOT_IP_DEFAULT = "192.168.1.159"
+
+TAG_SIZE = 0.08
+PREVIEW_MAX_WIDTH = 1280
+
+# Same numeric ids on both sheets — different families keeps detectors from colliding.
+PLAYMAT_TAG_FAMILY = "tag36h11"
+CHESSBOARD_TAG_FAMILY = "tag25h9"
+DETECTOR_CACHE = {}
+
+# solvePnP world XY per corner id (z=0 playmat plane).
+TAG_CENTER_COORDINATES = [[0.38, 0.4],
+                         [0.38, -0.4],
+                         [0.0, 0.4],
+                         [0.0, -0.4]]
+
+def get_pnp_pairs(tags):
+    half = TAG_SIZE / 2.0
+    world_points = numpy.empty([0, 3])
+    image_points = numpy.empty([0, 2])
+
+    for tag in tags:
+        tid = int(tag.tag_id)
+        if tid < 0 or tid > 3:
+            continue
+        cx, cy = TAG_CENTER_COORDINATES[tid]
+        # Same corner walk order as piece_continuity.get_4x4_transform — don't reorder casually.
+        wp_corners = [
+            [cx - half, cy - half],
+            [cx - half, cy + half],
+            [cx + half, cy + half],
+            [cx + half, cy - half],
+        ]
+        for k in range(4):
+            wp = numpy.array([wp_corners[k][0], wp_corners[k][1], 0.0], dtype=numpy.float64)
+            ip = numpy.asarray(tag.corners[k], dtype=numpy.float64)
+            world_points = numpy.vstack([world_points, wp])
+            image_points = numpy.vstack([image_points, ip])
+
+    return world_points, image_points
+
+
+def tag_polygon_area_sq_px(tag):
+    c = numpy.asarray(tag.corners, dtype=numpy.float32)
+    if c.shape[0] < 4:
+        return 0.0
+    c = c.reshape(-1, 1, 2)
+    return float(abs(cv2.contourArea(c)))
+
+
+def to_bgr_display(image):
+    if image is None:
+        return None
+    if len(image.shape) == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    return image.copy()
+
+
+def gray_from_image(image):
+    if image is None:
+        return None
+    if len(image.shape) == 2:
+        return image
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def detect_playmat_and_chessboard_tags(image):
+    if image is None:
+        return None, [], []
+    gray = gray_from_image(image)
+    playmat_detector = DETECTOR_CACHE.get(PLAYMAT_TAG_FAMILY)
+    if playmat_detector is None:
+        playmat_detector = Detector(families=PLAYMAT_TAG_FAMILY)
+        DETECTOR_CACHE[PLAYMAT_TAG_FAMILY] = playmat_detector
+    chess_detector = DETECTOR_CACHE.get(CHESSBOARD_TAG_FAMILY)
+    if chess_detector is None:
+        chess_detector = Detector(families=CHESSBOARD_TAG_FAMILY)
+        DETECTOR_CACHE[CHESSBOARD_TAG_FAMILY] = chess_detector
+    playmat_tags = playmat_detector.detect(gray, estimate_tag_pose=False)
+    chess_tags = chess_detector.detect(gray, estimate_tag_pose=False)
+    return gray, playmat_tags, chess_tags
+
+
+def best_tag_per_id_0_3(tags):
+    by_id = {}
+    for t in tags:
+        tid = int(t.tag_id)
+        if tid not in (0, 1, 2, 3):
+            continue
+        prev = by_id.get(tid)
+        if prev is None or tag_polygon_area_sq_px(t) > tag_polygon_area_sq_px(prev):
+            by_id[tid] = t
+    ordered = [by_id[i] for i in (0, 1, 2, 3) if i in by_id]
+    return ordered, len(by_id) == 4
+
+
+def draw_dual_family_tag_overlays(bgr_image, playmat_tags, chessboard_tags):
+    def draw_set(tags, prefix, color):
+        for tag in tags:
+            tid = int(tag.tag_id)
+            corners = numpy.asarray(tag.corners, dtype=numpy.int32)
+            if corners.shape[0] >= 4:
+                for i in range(4):
+                    p0 = tuple(corners[i])
+                    p1 = tuple(corners[(i + 1) % 4])
+                    cv2.line(bgr_image, p0, p1, color, 2)
+            cx, cy = int(tag.center[0]), int(tag.center[1])
+            label = f"{prefix}{tid}"
+            cv2.circle(bgr_image, (cx, cy), 5, color, -1)
+            cv2.putText(
+                bgr_image,
+                label,
+                (cx + 6, cy),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+    draw_set(playmat_tags, "pm", (0, 220, 0))
+    draw_set(chessboard_tags, "ch", (0, 140, 255))
+    summary = (
+        f"pm={PLAYMAT_TAG_FAMILY} n={len(playmat_tags)} | "
+        f"ch={CHESSBOARD_TAG_FAMILY} n={len(chessboard_tags)}"
+    )
+    cv2.putText(bgr_image, summary, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(bgr_image, summary, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 1, cv2.LINE_AA)
+
+
+def resize_for_preview(bgr, max_w=PREVIEW_MAX_WIDTH):
+    h, w = bgr.shape[:2]
+    if w <= max_w:
+        return bgr
+    scale = max_w / float(w)
+    return cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+
+def draw_pose_axes(image, camera_intrinsic, pose, size=0.1):
+    rvec, _ = cv2.Rodrigues(pose[:3, :3])
+    tvec = pose[:3, 3]
+    pts = numpy.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=numpy.float64).reshape(-1, 3) * size
+    ip, _ = cv2.projectPoints(pts, rvec, tvec, camera_intrinsic, None)
+    ip = numpy.round(ip).astype(int)
+    o, ux, uy, uz = (tuple(ip[i].ravel()) for i in range(4))
+    cv2.line(image, o, ux, (0, 0, 255), 2)
+    cv2.line(image, o, uy, (0, 255, 0), 2)
+    cv2.line(image, o, uz, (255, 0, 0), 2)
+
+
+def get_transform_camera_robot_from_tags(tags, camera_intrinsic):
+    world_points, image_points = get_pnp_pairs(tags)
+    if world_points.shape[0] < 4:
+        print("Insufficient playmat tag corners after filtering (need family %s, ids 0-3)." % PLAYMAT_TAG_FAMILY)
+        return None
+    success, rotation_vec, translation = cv2.solvePnP(
+        world_points, image_points, camera_intrinsic, None
+    )
+    if success is not True:
+        print("PnP Calculation Failed.")
+        return None
+    rotation_mat, _ = cv2.Rodrigues(rotation_vec)
+    transform_mat = numpy.eye(4)
+    transform_mat[:3, :3] = rotation_mat
+    transform_mat[:3, 3] = translation.flatten()
+    return transform_mat
+
+
+def main() -> None:
+    zed = ZedCamera()
+    camera_intrinsic = zed.camera_intrinsic
+
+    try:
+        cv_image = zed.image
+        if cv_image is None:
+            print("No image from camera.")
+            return
+
+        _, playmat_tags, chess_tags = detect_playmat_and_chessboard_tags(cv_image)
+        vis = to_bgr_display(cv_image)
+        draw_dual_family_tag_overlays(vis, playmat_tags, chess_tags)
+
+        pm_best, pm_ok = best_tag_per_id_0_3(playmat_tags)
+        t_cam_robot = get_transform_camera_robot_from_tags(pm_best, camera_intrinsic) if pm_ok else None
+        if not pm_ok:
+            print(
+                f"Playmat {PLAYMAT_TAG_FAMILY}: need ids 0–3. "
+                f"got {sorted(set(int(t.tag_id) for t in playmat_tags))}"
+            )
+        if t_cam_robot is not None:
+            draw_pose_axes(vis, camera_intrinsic, t_cam_robot, size=TAG_SIZE)
+            status = "PnP OK — pose axes (playmat %s)" % PLAYMAT_TAG_FAMILY
+            color = (0, 255, 0)
+        else:
+            status = "PnP FAILED — need four playmat tags ids 0-3 (%s)" % PLAYMAT_TAG_FAMILY
+            color = (0, 0, 255)
+
+        cv2.putText(
+            vis,
+            status,
+            (12, 56),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+        print(
+            f"[calibrate_tags] Preview: playmat n={len(playmat_tags)} chess n={len(chess_tags)}. {status}"
+        )
+        print("[calibrate_tags] Press any key to close.")
+
+        cv2.namedWindow("calibrate_tags: AprilTag preview", cv2.WINDOW_NORMAL)
+        cv2.imshow("calibrate_tags: AprilTag preview", resize_for_preview(vis))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    finally:
+        arm = XArmAPI(ROBOT_IP_DEFAULT)
+        arm.connect()
+        arm.motion_enable(enable=True)
+        arm.move_gohome(wait=True)
+        zed.close()
+
+
+if __name__ == "__main__":
+    main()
